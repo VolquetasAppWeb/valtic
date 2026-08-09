@@ -16,6 +16,12 @@ COPY packages ./packages
 COPY apps/api/package.json ./apps/api/package.json
 RUN pnpm install --frozen-lockfile
 
+# @valtic/types y @valtic/validation se consumen como JS compilado (no como
+# fuente TS): a diferencia de Next.js (transpilePackages) o ts-node-dev en
+# dev, el "node dist/main.js" de produccion no puede resolver su .ts fuente.
+RUN pnpm --filter @valtic/types build
+RUN pnpm --filter @valtic/validation build
+
 COPY apps/api ./apps/api
 WORKDIR /app/apps/api
 RUN pnpm prisma:generate

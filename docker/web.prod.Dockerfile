@@ -11,6 +11,12 @@ COPY packages ./packages
 COPY apps/web/package.json ./apps/web/package.json
 RUN pnpm install --frozen-lockfile
 
+# @valtic/types y @valtic/validation se consumen como JS compilado (ver
+# docker/api.prod.Dockerfile) — Next.js resuelve su "main"/"exports" a
+# dist/index.js antes de transpilarlo via transpilePackages.
+RUN pnpm --filter @valtic/types build
+RUN pnpm --filter @valtic/validation build
+
 COPY apps/web ./apps/web
 WORKDIR /app/apps/web
 
