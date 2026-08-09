@@ -1,0 +1,910 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// ENUMS
+// ---------------------------------------------------------------------------
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  BLOCKED
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum DocumentType {
+  CC
+  CE
+  PASSPORT
+  NIT
+}
+
+enum DriverStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum FleetOwnerType {
+  NATURAL_PERSON
+  LEGAL_ENTITY
+}
+
+enum FleetOwnerStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum VehicleType {
+  DUMP_TRUCK
+  DOUBLE_TRAILER
+  MINI_DUMP_TRUCK
+  TRACTOR_TRAILER
+  OTHER
+}
+
+enum CapacityUnit {
+  TON
+  CUBIC_METER
+}
+
+enum VehicleStatus {
+  ACTIVE
+  MAINTENANCE
+  INACTIVE
+}
+
+enum ProjectStatus {
+  PLANNED
+  ACTIVE
+  PAUSED
+  CLOSED
+}
+
+enum OperationalSiteType {
+  LOAD
+  UNLOAD
+  BOTH
+}
+
+enum OperationalSiteStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum MaterialStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum RateType {
+  PER_TRIP
+  PER_TON
+  PER_CUBIC_METER
+  PER_KILOMETER
+  FIXED
+}
+
+enum RateStatus {
+  ACTIVE
+  EXPIRED
+  INACTIVE
+}
+
+enum TripStatus {
+  DRAFT
+  ASSIGNED
+  ACCEPTED
+  EN_ROUTE_TO_LOAD
+  LOADING
+  LOADED
+  EN_ROUTE_TO_UNLOAD
+  UNLOADING
+  PENDING_VALIDATION
+  COMPLETED
+  INCLUDED_IN_SETTLEMENT
+  SETTLED
+  UNDER_REVIEW
+  BLOCKED_BY_INCIDENT
+  MANUALLY_CLOSED
+  CANCELLED
+  REJECTED
+}
+
+enum TripEventType {
+  CREATED
+  ASSIGNED
+  ACCEPTED
+  STARTED_TO_LOAD
+  ARRIVED_AT_LOAD
+  LOADING_CONFIRMED
+  DEPARTED_TO_UNLOAD
+  ARRIVED_AT_UNLOAD
+  QR_SCANNED
+  VALIDATION_PASSED
+  VALIDATION_FAILED
+  COMPLETED
+  CANCELLED
+  MANUALLY_CLOSED
+  INCIDENT_REPORTED
+  INCIDENT_RESOLVED
+  REVIEWED_APPROVED
+  REVIEWED_REJECTED
+  INCLUDED_IN_SETTLEMENT
+  SETTLED
+  COMPENSATION
+}
+
+enum TripEventSource {
+  ADMIN
+  DISPATCHER
+  DRIVER_APP
+  SYSTEM
+  QR_VALIDATION
+}
+
+enum CheckpointQrStatus {
+  ACTIVE
+  USED
+  EXPIRED
+  REVOKED
+}
+
+enum IncidentType {
+  MECHANICAL_FAILURE
+  TRAFFIC_ACCIDENT
+  DELAY
+  WEATHER
+  SECURITY
+  CARGO_ISSUE
+  ROAD_CLOSURE
+  OTHER
+}
+
+enum IncidentSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum IncidentStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  DISMISSED
+}
+
+enum EvidenceType {
+  PHOTO
+  DOCUMENT
+  OTHER
+}
+
+enum SettlementStatus {
+  DRAFT
+  APPROVED
+  PAID
+  CANCELLED
+}
+
+enum SettlementAdjustmentType {
+  BONUS
+  DEDUCTION
+  CORRECTION
+}
+
+// ---------------------------------------------------------------------------
+// TENANCY, USERS, RBAC
+// ---------------------------------------------------------------------------
+
+model Tenant {
+  id        String       @id @default(uuid())
+  name      String
+  legalName String
+  taxId     String
+  status    TenantStatus @default(ACTIVE)
+  logoUrl   String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  users              User[]
+  roles              Role[]
+  drivers            Driver[]
+  fleetOwners        FleetOwner[]
+  vehicles           Vehicle[]
+  assignments        DriverVehicleAssignment[]
+  projects           Project[]
+  operationalSites   OperationalSite[]
+  materials          Material[]
+  rates              Rate[]
+  trips              Trip[]
+  tripEvents         TripEvent[]
+  locationPoints     LocationPoint[]
+  checkpointQrs      CheckpointQr[]
+  incidents          Incident[]
+  evidences          Evidence[]
+  settlements        Settlement[]
+  auditEvents        AuditEvent[]
+
+  @@index([taxId])
+}
+
+model User {
+  id           String     @id @default(uuid())
+  tenantId     String?
+  firstName    String
+  lastName     String
+  email        String
+  passwordHash String
+  phone        String?
+  status       UserStatus @default(ACTIVE)
+  lastLoginAt  DateTime?
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+  passwordResetTokenHash String?
+  passwordResetExpiresAt DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id])
+
+  userRoles         UserRole[]
+  driverProfile     Driver?
+  fleetOwnerProfile FleetOwner?
+  refreshTokens     RefreshToken[]
+  auditEvents       AuditEvent[]      @relation("AuditActor")
+  createdTrips      Trip[]            @relation("TripCreatedBy")
+  resolvedIncidents Incident[]        @relation("IncidentResolvedBy")
+  uploadedEvidences Evidence[]        @relation("EvidenceUploadedBy")
+  approvedSettlements Settlement[]    @relation("SettlementApprovedBy")
+  createdAdjustments SettlementAdjustment[] @relation("AdjustmentCreatedBy")
+  managedDrivers      Driver[]        @relation("DispatcherDrivers")
+  managedVehicles     Vehicle[]       @relation("DispatcherVehicles")
+  managedProjects     Project[]       @relation("DispatcherProjects")
+  managedFleetOwners  FleetOwner[]    @relation("DispatcherFleetOwners")
+  deletedDrivers      Driver[]        @relation("DriverDeletedBy")
+  deletedVehicles     Vehicle[]       @relation("VehicleDeletedBy")
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@index([passwordResetTokenHash])
+}
+
+model RefreshToken {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String
+  deviceId   String?
+  userAgent  String?
+  ipAddress  String?
+  revokedAt  DateTime?
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// Sesiones de conductor: separadas de RefreshToken porque un Driver no
+// siempre tiene un User asociado (Driver.userId es opcional).
+model DriverRefreshToken {
+  id        String    @id @default(uuid())
+  driverId  String
+  tokenHash String
+  deviceId  String?
+  userAgent String?
+  ipAddress String?
+  revokedAt DateTime?
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+
+  driver Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@index([driverId])
+}
+
+model Role {
+  id          String  @id @default(uuid())
+  tenantId    String?
+  name        String
+  description String?
+
+  tenant          Tenant?          @relation(fields: [tenantId], references: [id])
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model Permission {
+  id          String @id @default(uuid())
+  key         String @unique
+  description String?
+
+  rolePermissions RolePermission[]
+}
+
+model UserRole {
+  userId String
+  roleId String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+// ---------------------------------------------------------------------------
+// DRIVERS, FLEET, VEHICLES
+// ---------------------------------------------------------------------------
+
+model Driver {
+  id                 String       @id @default(uuid())
+  tenantId           String
+  userId             String?      @unique
+  documentType       DocumentType
+  documentNumber     String
+  firstName          String
+  lastName           String
+  phone              String
+  pinHash            String
+  pinFailedAttempts  Int          @default(0)
+  pinLockedUntil     DateTime?
+  lastLoginAt        DateTime?
+  licenseNumber      String
+  licenseExpiration  DateTime
+  status             DriverStatus @default(ACTIVE)
+  // Dispatcher "dueno" del conductor: null si lo creo un TENANT_ADMIN (dato
+  // compartido/administrativo). Un DISPATCHER solo ve/gestiona los suyos.
+  dispatcherId       String?
+  // Soft-delete: un DISPATCHER puede eliminar sus propios conductores, pero
+  // la fila nunca se borra fisicamente — queda excluida de las consultas
+  // normales (deletedAt: null) y visible solo para TENANT_ADMIN via el
+  // historial (GET /drivers/deleted), ademas de quedar en AuditEvent.
+  deletedAt          DateTime?
+  deletedById        String?
+  deleteReason       String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  tenant     Tenant @relation(fields: [tenantId], references: [id])
+  user       User?  @relation(fields: [userId], references: [id])
+  dispatcher User?  @relation("DispatcherDrivers", fields: [dispatcherId], references: [id])
+  deletedBy  User?  @relation("DriverDeletedBy", fields: [deletedById], references: [id])
+
+  assignments    DriverVehicleAssignment[]
+  trips          Trip[]
+  tripEvents     TripEvent[]
+  locationPoints LocationPoint[]
+  incidents      Incident[]
+  refreshTokens  DriverRefreshToken[]
+  uploadedEvidences Evidence[] @relation("EvidenceUploadedByDriver")
+  auditEvents    AuditEvent[] @relation("AuditActorDriver")
+
+  @@unique([tenantId, documentNumber])
+  @@index([tenantId, status])
+  @@index([tenantId, dispatcherId])
+  @@index([tenantId, deletedAt])
+}
+
+model FleetOwner {
+  id                  String           @id @default(uuid())
+  tenantId            String
+  userId              String?          @unique
+  type                FleetOwnerType
+  documentNumber      String
+  name                String
+  phone               String
+  email                String?
+  bankName            String?
+  bankAccountType     String?
+  bankAccountLastFour String?
+  status              FleetOwnerStatus @default(ACTIVE)
+  // Dispatcher al que esta asignado este propietario: null si es
+  // administrativo/compartido (no visible para ningun DISPATCHER, igual que
+  // Driver/Vehicle/Project). Solo TENANT_ADMIN asigna esto al crear/editar.
+  dispatcherId        String?
+
+  tenant     Tenant @relation(fields: [tenantId], references: [id])
+  user       User?  @relation(fields: [userId], references: [id])
+  dispatcher User?  @relation("DispatcherFleetOwners", fields: [dispatcherId], references: [id])
+
+  vehicles    Vehicle[]
+  trips       Trip[]
+  settlements Settlement[]
+  rates       Rate[]
+
+  @@unique([tenantId, documentNumber])
+  @@index([tenantId, status])
+  @@index([tenantId, dispatcherId])
+}
+
+model Vehicle {
+  id           String        @id @default(uuid())
+  tenantId     String
+  fleetOwnerId String
+  plate        String
+  vehicleType  VehicleType
+  brand        String
+  model        String
+  year         Int
+  capacity     Decimal       @db.Decimal(10, 2)
+  capacityUnit CapacityUnit
+  status       VehicleStatus @default(ACTIVE)
+  // Mismo patron que Driver.dispatcherId: null si lo creo un TENANT_ADMIN.
+  dispatcherId String?
+  // Soft-delete: mismo patron que Driver — el DISPATCHER elimina solo sus
+  // propios vehiculos, pero la fila nunca se borra fisicamente; queda
+  // excluida de las consultas normales (deletedAt: null) y visible solo
+  // para TENANT_ADMIN via el historial (GET /vehicles/deleted).
+  deletedAt    DateTime?
+  deletedById  String?
+  deleteReason String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  fleetOwner FleetOwner @relation(fields: [fleetOwnerId], references: [id])
+  dispatcher User?      @relation("DispatcherVehicles", fields: [dispatcherId], references: [id])
+  deletedBy  User?      @relation("VehicleDeletedBy", fields: [deletedById], references: [id])
+
+  assignments DriverVehicleAssignment[]
+  trips       Trip[]
+  incidents   Incident[]
+
+  @@unique([tenantId, plate])
+  @@index([tenantId, status])
+  @@index([tenantId, dispatcherId])
+  @@index([tenantId, deletedAt])
+}
+
+model DriverVehicleAssignment {
+  id        String    @id @default(uuid())
+  tenantId  String
+  driverId  String
+  vehicleId String
+  startAt   DateTime  @default(now())
+  endAt     DateTime?
+  active    Boolean   @default(true)
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id])
+  driver  Driver  @relation(fields: [driverId], references: [id])
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id])
+
+  @@index([tenantId, active])
+  @@index([driverId])
+  @@index([vehicleId])
+}
+
+// ---------------------------------------------------------------------------
+// PROJECTS & OPERATIONAL SITES
+// ---------------------------------------------------------------------------
+
+model Project {
+  id          String        @id @default(uuid())
+  tenantId    String
+  name        String
+  code        String
+  description String?
+  clientName  String
+  status      ProjectStatus @default(PLANNED)
+  startDate   DateTime
+  endDate     DateTime?
+  // Mismo patron que Driver.dispatcherId: null si la creo un TENANT_ADMIN.
+  dispatcherId String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  tenant     Tenant @relation(fields: [tenantId], references: [id])
+  dispatcher User?  @relation("DispatcherProjects", fields: [dispatcherId], references: [id])
+
+  operationalSites OperationalSite[]
+  rates            Rate[]
+  trips            Trip[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, status])
+  @@index([tenantId, dispatcherId])
+}
+
+model OperationalSite {
+  id              String                 @id @default(uuid())
+  tenantId        String
+  projectId       String
+  name            String
+  type            OperationalSiteType
+  address         String
+  latitude        Float
+  longitude       Float
+  geofenceRadius  Int
+  status          OperationalSiteStatus  @default(ACTIVE)
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id])
+  project Project @relation(fields: [projectId], references: [id])
+
+  ratesAsOrigin      Rate[]         @relation("RateOriginSite")
+  ratesAsDestination Rate[]         @relation("RateDestinationSite")
+  tripsAsOrigin      Trip[]         @relation("TripOriginSite")
+  tripsAsDestination Trip[]         @relation("TripDestinationSite")
+  checkpointQrs      CheckpointQr[]
+
+  @@index([tenantId, projectId])
+}
+
+model Material {
+  id       String         @id @default(uuid())
+  tenantId String
+  name     String
+  code     String
+  unit     String
+  status   MaterialStatus @default(ACTIVE)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  rates  Rate[]
+  trips  Trip[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, status])
+}
+
+// ---------------------------------------------------------------------------
+// RATES
+// ---------------------------------------------------------------------------
+
+model Rate {
+  id                 String     @id @default(uuid())
+  tenantId           String
+  projectId          String
+  originSiteId       String
+  destinationSiteId  String
+  materialId         String
+  fleetOwnerId       String?
+  vehicleType        VehicleType?
+  rateType           RateType
+  value              Decimal    @db.Decimal(12, 2)
+  currency           String     @default("COP")
+  validFrom          DateTime
+  validUntil         DateTime?
+  status             RateStatus @default(ACTIVE)
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id])
+  project         Project         @relation(fields: [projectId], references: [id])
+  originSite      OperationalSite @relation("RateOriginSite", fields: [originSiteId], references: [id])
+  destinationSite OperationalSite @relation("RateDestinationSite", fields: [destinationSiteId], references: [id])
+  material        Material        @relation(fields: [materialId], references: [id])
+  fleetOwner      FleetOwner?     @relation(fields: [fleetOwnerId], references: [id])
+
+  trips Trip[]
+
+  @@index([tenantId, projectId, status])
+  @@index([tenantId, originSiteId, destinationSiteId, materialId])
+}
+
+// ---------------------------------------------------------------------------
+// TRIPS
+// ---------------------------------------------------------------------------
+
+model Trip {
+  id                 String     @id @default(uuid())
+  tenantId           String
+  sequentialNumber   Int
+  projectId          String
+  driverId           String
+  vehicleId          String
+  fleetOwnerId       String
+  originSiteId       String
+  destinationSiteId  String
+  materialId         String
+  rateId             String?
+  status             TripStatus @default(DRAFT)
+  estimatedQuantity  Decimal?   @db.Decimal(10, 2)
+  actualQuantity     Decimal?   @db.Decimal(10, 2)
+  quantityUnit       CapacityUnit?
+  rateSnapshot       Json?
+  assignedAt         DateTime?
+  acceptedAt         DateTime?
+  startedAt          DateTime?
+  loadedAt           DateTime?
+  completedAt        DateTime?
+  cancelledAt        DateTime?
+  cancellationReason String?
+  createdById        String
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+  version            Int        @default(1)
+  // Foto del vale fisico (recibo de entrega de material) tomada por el
+  // conductor al cerrar el viaje + resultado de OCR sobre esa foto. Los
+  // vales no traen valor en pesos, traen cantidad/volumen y numero de vale
+  // — eso es lo que se extrae, como referencia para comparar contra la
+  // cantidad registrada del viaje, nunca reemplaza ese dato. La foto tambien
+  // queda con la fecha/hora y ubicacion GPS de cuando se tomo (no lo que
+  // diga el papel), para poder verificar donde y cuando se capturo.
+  voucherImageUrl        String?
+  voucherRawText         String?
+  voucherNumber          String?
+  voucherExtractedQuantity Decimal? @db.Decimal(10, 2)
+  voucherExtractedUnit   CapacityUnit?
+  // Cualquier otro campo con etiqueta que el OCR pudo leer del vale
+  // (cliente, obra, placa, conductor, fecha, etc) — { "Placa": "TGN313", ... }.
+  voucherExtractedFields Json?
+  voucherCapturedAt      DateTime?
+  voucherLatitude        Float?
+  voucherLongitude       Float?
+  voucherUploadedAt      DateTime?
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id])
+  project         Project         @relation(fields: [projectId], references: [id])
+  driver          Driver          @relation(fields: [driverId], references: [id])
+  vehicle         Vehicle         @relation(fields: [vehicleId], references: [id])
+  fleetOwner      FleetOwner      @relation(fields: [fleetOwnerId], references: [id])
+  originSite      OperationalSite @relation("TripOriginSite", fields: [originSiteId], references: [id])
+  destinationSite OperationalSite @relation("TripDestinationSite", fields: [destinationSiteId], references: [id])
+  material        Material        @relation(fields: [materialId], references: [id])
+  rate            Rate?           @relation(fields: [rateId], references: [id])
+  createdBy       User            @relation("TripCreatedBy", fields: [createdById], references: [id])
+
+  events          TripEvent[]
+  locationPoints  LocationPoint[]
+  incidents       Incident[]
+  evidences       Evidence[]
+  settlementItems SettlementItem[]
+
+  @@unique([tenantId, sequentialNumber])
+  @@index([tenantId, status])
+  @@index([tenantId, driverId])
+  @@index([tenantId, vehicleId])
+  @@index([tenantId, fleetOwnerId])
+  @@index([tenantId, projectId])
+}
+
+// Cadena de eventos append-only por viaje (integridad via eventHash encadenado).
+model TripEvent {
+  id               String           @id @default(uuid())
+  tenantId         String
+  tripId           String
+  type             TripEventType
+  source           TripEventSource
+  actorUserId      String?
+  driverId         String?
+  deviceId         String?
+  latitude         Float?
+  longitude        Float?
+  accuracy         Float?
+  payload          Json
+  previousHash     String?
+  eventHash        String
+  occurredAt       DateTime
+  receivedAt       DateTime         @default(now())
+  createdAt        DateTime         @default(now())
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id])
+  trip   Trip    @relation(fields: [tripId], references: [id])
+  driver Driver? @relation(fields: [driverId], references: [id])
+
+  locationPoints LocationPoint[]
+
+  @@index([tenantId, tripId, createdAt])
+}
+
+model LocationPoint {
+  id         String   @id @default(uuid())
+  tenantId   String
+  tripId     String
+  driverId   String
+  deviceId   String
+  eventId    String   @unique
+  latitude   Float
+  longitude  Float
+  accuracy   Float
+  altitude   Float?
+  speed      Float?
+  heading    Float?
+  capturedAt DateTime
+  receivedAt DateTime @default(now())
+
+  tripEventId String?
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id])
+  trip      Trip       @relation(fields: [tripId], references: [id])
+  driver    Driver     @relation(fields: [driverId], references: [id])
+  tripEvent TripEvent? @relation(fields: [tripEventId], references: [id])
+
+  @@index([tenantId, tripId, capturedAt])
+}
+
+model CheckpointQr {
+  id                 String             @id @default(uuid())
+  tenantId           String
+  operationalSiteId  String
+  nonce              String             @unique
+  expiresAt          DateTime
+  usedAt             DateTime?
+  status             CheckpointQrStatus @default(ACTIVE)
+  signature          String
+  createdAt          DateTime           @default(now())
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id])
+  operationalSite OperationalSite @relation(fields: [operationalSiteId], references: [id])
+
+  @@index([tenantId, operationalSiteId, status])
+}
+
+// ---------------------------------------------------------------------------
+// INCIDENTS & EVIDENCE
+// ---------------------------------------------------------------------------
+
+model Incident {
+  id               String           @id @default(uuid())
+  tenantId         String
+  tripId           String?
+  driverId         String
+  vehicleId        String?
+  type             IncidentType
+  severity         IncidentSeverity
+  description      String
+  latitude         Float?
+  longitude        Float?
+  status           IncidentStatus   @default(OPEN)
+  reportedAt       DateTime         @default(now())
+  resolvedAt       DateTime?
+  resolvedById     String?
+  resolutionNotes  String?
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  trip       Trip?    @relation(fields: [tripId], references: [id])
+  driver     Driver   @relation(fields: [driverId], references: [id])
+  vehicle    Vehicle? @relation(fields: [vehicleId], references: [id])
+  resolvedBy User?    @relation("IncidentResolvedBy", fields: [resolvedById], references: [id])
+
+  evidences Evidence[]
+
+  @@index([tenantId, status, severity])
+  @@index([tenantId, tripId])
+}
+
+model Evidence {
+  id           String       @id @default(uuid())
+  tenantId     String
+  tripId       String?
+  incidentId   String?
+  type         EvidenceType
+  fileUrl      String
+  fileName     String
+  mimeType     String
+  fileSize     Int
+  // Quien subio el archivo puede ser un usuario administrativo o un
+  // conductor sin cuenta de User asociada; exactamente uno de los dos se
+  // llena (mismo patron que TripEvent.actorUserId/driverId).
+  uploadedById       String?
+  uploadedByDriverId String?
+  createdAt          DateTime     @default(now())
+
+  tenant           Tenant    @relation(fields: [tenantId], references: [id])
+  trip             Trip?     @relation(fields: [tripId], references: [id])
+  incident         Incident? @relation(fields: [incidentId], references: [id])
+  uploadedBy       User?     @relation("EvidenceUploadedBy", fields: [uploadedById], references: [id])
+  uploadedByDriver Driver?   @relation("EvidenceUploadedByDriver", fields: [uploadedByDriverId], references: [id])
+
+  @@index([tenantId, tripId])
+  @@index([tenantId, incidentId])
+}
+
+// ---------------------------------------------------------------------------
+// SETTLEMENTS
+// ---------------------------------------------------------------------------
+
+model Settlement {
+  id               String           @id @default(uuid())
+  tenantId         String
+  sequentialNumber Int
+  fleetOwnerId     String
+  periodStart      DateTime
+  periodEnd        DateTime
+  status           SettlementStatus @default(DRAFT)
+  subtotal         Decimal          @db.Decimal(14, 2)
+  adjustmentsTotal Decimal          @default(0) @db.Decimal(14, 2)
+  total            Decimal          @db.Decimal(14, 2)
+  currency         String           @default("COP")
+  approvedById     String?
+  approvedAt       DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  fleetOwner FleetOwner @relation(fields: [fleetOwnerId], references: [id])
+  approvedBy User?      @relation("SettlementApprovedBy", fields: [approvedById], references: [id])
+
+  items       SettlementItem[]
+  adjustments SettlementAdjustment[]
+
+  @@unique([tenantId, sequentialNumber])
+  @@index([tenantId, fleetOwnerId, status])
+}
+
+model SettlementItem {
+  id           String   @id @default(uuid())
+  settlementId String
+  tripId       String
+  rateType     RateType
+  quantity     Decimal  @db.Decimal(10, 2)
+  unitValue    Decimal  @db.Decimal(12, 2)
+  total        Decimal  @db.Decimal(14, 2)
+  rateSnapshot Json
+
+  settlement Settlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  trip       Trip       @relation(fields: [tripId], references: [id])
+
+  // Un viaje solo puede pertenecer a una liquidacion activa (draft/approved) a la vez.
+  @@unique([tripId])
+  @@index([settlementId])
+}
+
+model SettlementAdjustment {
+  id           String                    @id @default(uuid())
+  settlementId String
+  type         SettlementAdjustmentType
+  description  String
+  amount       Decimal                   @db.Decimal(14, 2)
+  createdById  String
+  createdAt    DateTime                  @default(now())
+
+  settlement Settlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  createdBy  User       @relation("AdjustmentCreatedBy", fields: [createdById], references: [id])
+
+  @@index([settlementId])
+}
+
+// ---------------------------------------------------------------------------
+// AUDIT
+// ---------------------------------------------------------------------------
+
+model AuditEvent {
+  id            String   @id @default(uuid())
+  tenantId      String?
+  actorUserId   String?
+  // Actor cuando la accion la origina un conductor (app movil), ya que
+  // Driver es una tabla separada de User y no puede compartir actorUserId.
+  actorDriverId String?
+  action        String
+  entityType    String
+  entityId      String
+  oldValue      Json?
+  newValue      Json?
+  reason        String?
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime @default(now())
+
+  tenant      Tenant? @relation(fields: [tenantId], references: [id])
+  actor       User?   @relation("AuditActor", fields: [actorUserId], references: [id])
+  actorDriver Driver? @relation("AuditActorDriver", fields: [actorDriverId], references: [id])
+
+  @@index([tenantId, entityType, entityId])
+  @@index([tenantId, createdAt])
+  @@index([actorDriverId])
+}

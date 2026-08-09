@@ -1,0 +1,260 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { HardHat, MapPin, Pencil, Plus } from "lucide-react";
+import { projectSchema, type ProjectInput } from "@valtic/validation";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
+import { StatusBadge } from "@/components/admin/status-badge";
+import { apiClient, ApiError } from "@/lib/api-client";
+import type { PaginatedResult, Project } from "@/lib/api-types";
+
+const STATUS_OPTIONS = ["PLANNED", "ACTIVE", "PAUSED", "CLOSED"] as const;
+
+export default function ProjectsPage(): JSX.Element {
+  const queryClient = useQueryClient();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editing, setEditing] = useState<Project | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const [search, setSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+
+  const projectParams = new URLSearchParams({ pageSize: "100" });
+  if (appliedSearch) projectParams.set("search", appliedSearch);
+  if (statusFilter) projectParams.set("status", statusFilter);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["projects", appliedSearch, statusFilter],
+    queryFn: () => apiClient.get<PaginatedResult<Project>>(`/projects?${projectParams.toString()}`),
+    refetchInterval: 15_000,
+  });
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors },
+  } = useForm<ProjectInput>({ resolver: zodResolver(projectSchema) });
+
+  function openCreate(): void {
+    setEditing(null);
+    setFormError(null);
+    reset({ name: "", code: "", description: "", clientName: "", startDate: "", endDate: "" });
+    setDialogOpen(true);
+  }
+
+  function openEdit(project: Project): void {
+    setEditing(project);
+    setFormError(null);
+    reset({
+      name: project.name,
+      code: project.code,
+      description: project.description ?? "",
+      clientName: project.clientName,
+      startDate: project.startDate.slice(0, 10),
+      endDate: project.endDate?.slice(0, 10) ?? "",
+    });
+    setDialogOpen(true);
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: (values: ProjectInput) => {
+      const payload = { ...values, description: values.description || undefined, endDate: values.endDate || undefined };
+      return editing
+        ? apiClient.patch<Project>(`/projects/${editing.id}`, payload)
+        : apiClient.post<Project>("/projects", payload);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      setDialogOpen(false);
+    },
+    onError: (error: unknown) => {
+      setFormError(error instanceof ApiError ? error.response.message : "No se pudo guardar la obra.");
+    },
+  });
+
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: (typeof STATUS_OPTIONS)[number] }) =>
+      apiClient.patch<Project>(`/projects/${id}/status`, { status }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects"] }),
+  });
+
+  const projects = data?.data ?? [];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Obras</h1>
+          <p className="text-sm text-muted-foreground">Proyectos u obras donde se ejecutan los viajes.</p>
+        </div>
+        <Button onClick={openCreate}>
+          <Plus className="h-4 w-4" />
+          Nueva obra
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap items-end gap-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="project-search">Buscar</Label>
+          <Input
+            id="project-search"
+            placeholder="Nombre, codigo o cliente..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && setAppliedSearch(search)}
+            className="w-56"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Estado</Label>
+          <Select value={statusFilter || "ALL"} onValueChange={(v) => setStatusFilter(v === "ALL" ? "" : v)}>
+            <SelectTrigger className="w-44">
+              <SelectValue placeholder="Todos los estados" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">Todos los estados</SelectItem>
+              {STATUS_OPTIONS.map((status) => (
+                <SelectItem key={status} value={status}>
+                  {status}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <Button variant="outline" onClick={() => setAppliedSearch(search)}>
+          Filtrar
+        </Button>
+      </div>
+
+      <Card className="p-0">
+        {isLoading ? (
+          <div className="space-y-2 p-6">
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
+          </div>
+        ) : projects.length === 0 ? (
+          <div className="p-6">
+            <EmptyState icon={HardHat} title="Sin obras registradas" description="Crea la primera obra para configurar sus puntos operativos." />
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Nombre</TableHead>
+                <TableHead>Codigo</TableHead>
+                <TableHead>Cliente</TableHead>
+                <TableHead>Puntos</TableHead>
+                <TableHead>Estado</TableHead>
+                <TableHead className="text-right">Acciones</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {projects.map((project) => (
+                <TableRow key={project.id}>
+                  <TableCell className="font-medium">{project.name}</TableCell>
+                  <TableCell className="text-muted-foreground">{project.code}</TableCell>
+                  <TableCell className="text-muted-foreground">{project.clientName}</TableCell>
+                  <TableCell className="text-muted-foreground">{project._count?.operationalSites ?? 0}</TableCell>
+                  <TableCell>
+                    <Select
+                      value={project.status}
+                      onValueChange={(status) => statusMutation.mutate({ id: project.id, status: status as (typeof STATUS_OPTIONS)[number] })}
+                    >
+                      <SelectTrigger className="h-8 w-32">
+                        <SelectValue>
+                          <StatusBadge status={project.status} />
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {STATUS_OPTIONS.map((status) => (
+                          <SelectItem key={status} value={status}>
+                            {status}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="icon" asChild aria-label="Puntos operativos">
+                        <Link href={`/operational-sites?projectId=${project.id}`}>
+                          <MapPin className="h-4 w-4" />
+                        </Link>
+                      </Button>
+                      <Button variant="ghost" size="icon" onClick={() => openEdit(project)} aria-label="Editar">
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editing ? "Editar obra" : "Nueva obra"}</DialogTitle>
+          </DialogHeader>
+          <form className="space-y-4" onSubmit={handleSubmit((values) => saveMutation.mutate(values))}>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="name">Nombre</Label>
+                <Input id="name" {...register("name")} />
+                {errors.name && <p className="text-xs text-destructive">{errors.name.message}</p>}
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="code">Codigo</Label>
+                <Input id="code" {...register("code")} />
+                {errors.code && <p className="text-xs text-destructive">{errors.code.message}</p>}
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="clientName">Cliente</Label>
+              <Input id="clientName" {...register("clientName")} />
+              {errors.clientName && <p className="text-xs text-destructive">{errors.clientName.message}</p>}
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="description">Descripcion (opcional)</Label>
+              <Textarea id="description" {...register("description")} />
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="startDate">Fecha de inicio</Label>
+                <Input id="startDate" type="date" {...register("startDate")} />
+                {errors.startDate && <p className="text-xs text-destructive">{errors.startDate.message}</p>}
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="endDate">Fecha de fin (opcional)</Label>
+                <Input id="endDate" type="date" {...register("endDate")} />
+              </div>
+            </div>
+            {formError && <p className="text-sm text-destructive">{formError}</p>}
+            <DialogFooter>
+              <Button type="submit" disabled={saveMutation.isPending}>
+                {saveMutation.isPending ? "Guardando..." : "Guardar"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

@@ -1,0 +1,211 @@
+// Enums compartidos entre apps/api (Prisma) y apps/web.
+// Deben mantenerse en sincronia con apps/api/prisma/schema.prisma.
+
+export enum TenantStatus {
+  ACTIVE = "ACTIVE",
+  SUSPENDED = "SUSPENDED",
+  BLOCKED = "BLOCKED",
+}
+
+export enum UserStatus {
+  ACTIVE = "ACTIVE",
+  INACTIVE = "INACTIVE",
+}
+
+export enum DocumentType {
+  CC = "CC",
+  CE = "CE",
+  PASSPORT = "PASSPORT",
+  NIT = "NIT",
+}
+
+export enum DriverStatus {
+  ACTIVE = "ACTIVE",
+  INACTIVE = "INACTIVE",
+  SUSPENDED = "SUSPENDED",
+}
+
+export enum FleetOwnerType {
+  NATURAL_PERSON = "NATURAL_PERSON",
+  LEGAL_ENTITY = "LEGAL_ENTITY",
+}
+
+export enum FleetOwnerStatus {
+  ACTIVE = "ACTIVE",
+  INACTIVE = "INACTIVE",
+}
+
+export enum VehicleType {
+  DUMP_TRUCK = "DUMP_TRUCK",
+  DOUBLE_TRAILER = "DOUBLE_TRAILER",
+  MINI_DUMP_TRUCK = "MINI_DUMP_TRUCK",
+  TRACTOR_TRAILER = "TRACTOR_TRAILER",
+  OTHER = "OTHER",
+}
+
+export enum CapacityUnit {
+  TON = "TON",
+  CUBIC_METER = "CUBIC_METER",
+}
+
+export enum VehicleStatus {
+  ACTIVE = "ACTIVE",
+  MAINTENANCE = "MAINTENANCE",
+  INACTIVE = "INACTIVE",
+}
+
+export enum ProjectStatus {
+  PLANNED = "PLANNED",
+  ACTIVE = "ACTIVE",
+  PAUSED = "PAUSED",
+  CLOSED = "CLOSED",
+}
+
+export enum OperationalSiteType {
+  LOAD = "LOAD",
+  UNLOAD = "UNLOAD",
+  BOTH = "BOTH",
+}
+
+export enum OperationalSiteStatus {
+  ACTIVE = "ACTIVE",
+  INACTIVE = "INACTIVE",
+}
+
+export enum MaterialStatus {
+  ACTIVE = "ACTIVE",
+  INACTIVE = "INACTIVE",
+}
+
+export enum RateType {
+  PER_TRIP = "PER_TRIP",
+  PER_TON = "PER_TON",
+  PER_CUBIC_METER = "PER_CUBIC_METER",
+  PER_KILOMETER = "PER_KILOMETER",
+  FIXED = "FIXED",
+}
+
+export enum RateStatus {
+  ACTIVE = "ACTIVE",
+  EXPIRED = "EXPIRED",
+  INACTIVE = "INACTIVE",
+}
+
+export enum TripStatus {
+  DRAFT = "DRAFT",
+  ASSIGNED = "ASSIGNED",
+  ACCEPTED = "ACCEPTED",
+  EN_ROUTE_TO_LOAD = "EN_ROUTE_TO_LOAD",
+  LOADING = "LOADING",
+  LOADED = "LOADED",
+  EN_ROUTE_TO_UNLOAD = "EN_ROUTE_TO_UNLOAD",
+  UNLOADING = "UNLOADING",
+  PENDING_VALIDATION = "PENDING_VALIDATION",
+  COMPLETED = "COMPLETED",
+  INCLUDED_IN_SETTLEMENT = "INCLUDED_IN_SETTLEMENT",
+  SETTLED = "SETTLED",
+  UNDER_REVIEW = "UNDER_REVIEW",
+  BLOCKED_BY_INCIDENT = "BLOCKED_BY_INCIDENT",
+  MANUALLY_CLOSED = "MANUALLY_CLOSED",
+  CANCELLED = "CANCELLED",
+  REJECTED = "REJECTED",
+}
+
+export enum TripEventType {
+  CREATED = "CREATED",
+  ASSIGNED = "ASSIGNED",
+  ACCEPTED = "ACCEPTED",
+  STARTED_TO_LOAD = "STARTED_TO_LOAD",
+  ARRIVED_AT_LOAD = "ARRIVED_AT_LOAD",
+  LOADING_CONFIRMED = "LOADING_CONFIRMED",
+  DEPARTED_TO_UNLOAD = "DEPARTED_TO_UNLOAD",
+  ARRIVED_AT_UNLOAD = "ARRIVED_AT_UNLOAD",
+  QR_SCANNED = "QR_SCANNED",
+  VALIDATION_PASSED = "VALIDATION_PASSED",
+  VALIDATION_FAILED = "VALIDATION_FAILED",
+  COMPLETED = "COMPLETED",
+  CANCELLED = "CANCELLED",
+  MANUALLY_CLOSED = "MANUALLY_CLOSED",
+  INCIDENT_REPORTED = "INCIDENT_REPORTED",
+  INCIDENT_RESOLVED = "INCIDENT_RESOLVED",
+  REVIEWED_APPROVED = "REVIEWED_APPROVED",
+  REVIEWED_REJECTED = "REVIEWED_REJECTED",
+  INCLUDED_IN_SETTLEMENT = "INCLUDED_IN_SETTLEMENT",
+  SETTLED = "SETTLED",
+  COMPENSATION = "COMPENSATION",
+}
+
+export enum TripEventSource {
+  ADMIN = "ADMIN",
+  DISPATCHER = "DISPATCHER",
+  DRIVER_APP = "DRIVER_APP",
+  SYSTEM = "SYSTEM",
+  QR_VALIDATION = "QR_VALIDATION",
+}
+
+export enum CheckpointQrStatus {
+  ACTIVE = "ACTIVE",
+  USED = "USED",
+  EXPIRED = "EXPIRED",
+  REVOKED = "REVOKED",
+}
+
+export enum IncidentType {
+  MECHANICAL_FAILURE = "MECHANICAL_FAILURE",
+  TRAFFIC_ACCIDENT = "TRAFFIC_ACCIDENT",
+  DELAY = "DELAY",
+  WEATHER = "WEATHER",
+  SECURITY = "SECURITY",
+  CARGO_ISSUE = "CARGO_ISSUE",
+  ROAD_CLOSURE = "ROAD_CLOSURE",
+  OTHER = "OTHER",
+}
+
+export enum IncidentSeverity {
+  LOW = "LOW",
+  MEDIUM = "MEDIUM",
+  HIGH = "HIGH",
+  CRITICAL = "CRITICAL",
+}
+
+export enum IncidentStatus {
+  OPEN = "OPEN",
+  IN_PROGRESS = "IN_PROGRESS",
+  RESOLVED = "RESOLVED",
+  DISMISSED = "DISMISSED",
+}
+
+export enum EvidenceType {
+  PHOTO = "PHOTO",
+  DOCUMENT = "DOCUMENT",
+  OTHER = "OTHER",
+}
+
+export enum SettlementStatus {
+  DRAFT = "DRAFT",
+  APPROVED = "APPROVED",
+  PAID = "PAID",
+  CANCELLED = "CANCELLED",
+}
+
+export enum SettlementAdjustmentType {
+  BONUS = "BONUS",
+  DEDUCTION = "DEDUCTION",
+  CORRECTION = "CORRECTION",
+}
+
+export enum SyncEventStatus {
+  PENDING = "PENDING",
+  SENDING = "SENDING",
+  ACKNOWLEDGED = "ACKNOWLEDGED",
+  FAILED = "FAILED",
+  REQUIRES_REVIEW = "REQUIRES_REVIEW",
+}
+
+export enum RoleName {
+  SUPER_ADMIN = "SUPER_ADMIN",
+  TENANT_ADMIN = "TENANT_ADMIN",
+  DISPATCHER = "DISPATCHER",
+  FLEET_OWNER = "FLEET_OWNER",
+  DRIVER = "DRIVER",
+}

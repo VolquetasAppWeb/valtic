@@ -1,0 +1,25 @@
+{
+  "name": "valtic",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "dev:api": "pnpm --filter @valtic/api dev",
+    "dev:web": "pnpm --filter @valtic/web dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "prisma:generate": "pnpm --filter @valtic/api prisma:generate",
+    "prisma:migrate": "pnpm --filter @valtic/api prisma:migrate",
+    "prisma:seed": "pnpm --filter @valtic/api prisma:seed",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "prettier": "^3.3.3"
+  }
+}
