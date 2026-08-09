@@ -8,9 +8,15 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { adminLoginSchema, type AdminLoginInput } from "@valtic/validation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Logo } from "@/components/brand/logo";
 import { apiClient, ApiError } from "@/lib/api-client";
 import { useAuthStore } from "@/stores/auth-store";
+
+const LEGAL_DOCUMENTS = [
+  { label: "Terminos y Condiciones", href: "/legal/terminos-y-condiciones.pdf" },
+  { label: "Politica de Tratamiento de Datos", href: "/legal/politica-tratamiento-datos-personales.pdf" },
+] as const;
 
 interface AdminLoginResponse {
   accessToken: string;
@@ -30,6 +36,7 @@ export default function LoginPage(): JSX.Element {
   const setUserSession = useAuthStore((state) => state.setUserSession);
   const [serverError, setServerError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [openLegalDoc, setOpenLegalDoc] = useState<(typeof LEGAL_DOCUMENTS)[number] | null>(null);
 
   const {
     register,
@@ -123,8 +130,34 @@ export default function LoginPage(): JSX.Element {
             <Truck className="h-4 w-4" />
             Soy Conductor
           </Button>
+
+          <div className="mt-4 flex items-center justify-center gap-4 text-xs text-muted-foreground">
+            {LEGAL_DOCUMENTS.map((legalDoc) => (
+              <button
+                key={legalDoc.href}
+                type="button"
+                className="underline-offset-2 hover:text-foreground hover:underline"
+                onClick={() => setOpenLegalDoc(legalDoc)}
+              >
+                {legalDoc.label}
+              </button>
+            ))}
+          </div>
         </CardContent>
       </Card>
+
+      <Dialog open={openLegalDoc !== null} onOpenChange={(open) => !open && setOpenLegalDoc(null)}>
+        <DialogContent className="flex h-[90vh] w-full max-w-4xl flex-col">
+          <DialogTitle>{openLegalDoc?.label}</DialogTitle>
+          {openLegalDoc && (
+            <iframe
+              src={openLegalDoc.href}
+              title={openLegalDoc.label}
+              className="h-full w-full flex-1 rounded-md border border-border"
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
