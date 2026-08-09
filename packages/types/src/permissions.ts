@@ -95,6 +95,9 @@ export const TENANT_ROLE_DEFAULT_PERMISSIONS: Record<TenantRoleName, PermissionK
     PERMISSIONS.SITES_MANAGE,
     PERMISSIONS.SITES_READ,
     PERMISSIONS.MATERIALS_READ,
+    // Cada DISPATCHER fija sus propias tarifas (Rate.dispatcherId), no solo
+    // las lee — mismo criterio que drivers/vehicles/projects arriba.
+    PERMISSIONS.RATES_MANAGE,
     PERMISSIONS.RATES_READ,
     PERMISSIONS.TRIPS_CREATE,
     PERMISSIONS.TRIPS_ASSIGN,
