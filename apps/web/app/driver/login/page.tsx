@@ -3,10 +3,16 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { NumericKeypad, PinDots } from "@/components/driver/numeric-keypad";
 import { Logo } from "@/components/brand/logo";
 import { apiClient, ApiError } from "@/lib/api-client";
 import { useAuthStore } from "@/stores/auth-store";
+
+const DRIVER_AGREEMENT = {
+  label: "Acuerdo de Uso para Conductores",
+  href: "/legal/acuerdo-uso-conductores.pdf",
+};
 
 interface DriverLoginResponse {
   accessToken: string;
@@ -29,6 +35,7 @@ export default function DriverLoginPage(): JSX.Element {
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showAgreement, setShowAgreement] = useState(false);
 
   useEffect(() => {
     if (pin.length === PIN_LENGTH && documentOrPhone.length >= 4 && !isSubmitting) {
@@ -89,8 +96,27 @@ export default function DriverLoginPage(): JSX.Element {
             {error && <p className="text-center text-sm text-destructive">{error}</p>}
             <NumericKeypad value={pin} maxLength={PIN_LENGTH} onChange={setPin} disabled={isSubmitting} />
           </div>
+
+          <button
+            type="button"
+            className="w-full text-center text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            onClick={() => setShowAgreement(true)}
+          >
+            {DRIVER_AGREEMENT.label}
+          </button>
         </CardContent>
       </Card>
+
+      <Dialog open={showAgreement} onOpenChange={setShowAgreement}>
+        <DialogContent className="flex h-[90vh] w-full max-w-4xl flex-col">
+          <DialogTitle>{DRIVER_AGREEMENT.label}</DialogTitle>
+          <iframe
+            src={DRIVER_AGREEMENT.href}
+            title={DRIVER_AGREEMENT.label}
+            className="h-full w-full flex-1 rounded-md border border-border"
+          />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
