@@ -274,6 +274,7 @@ async function main(): Promise<void> {
         currency: "COP",
         validFrom: new Date("2026-01-01"),
         status: "ACTIVE",
+        dispatcherId: dispatcher.id,
       },
     });
 

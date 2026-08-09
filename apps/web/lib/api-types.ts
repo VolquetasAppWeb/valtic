@@ -116,6 +116,8 @@ export interface Rate {
   destinationSite?: { id: string; name: string };
   material?: { id: string; name: string };
   fleetOwner?: { id: string; name: string } | null;
+  dispatcherId: string | null;
+  dispatcher?: { id: string; firstName: string; lastName: string } | null;
 }
 
 export type TripStatus =

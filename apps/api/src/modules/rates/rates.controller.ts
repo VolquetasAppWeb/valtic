@@ -26,22 +26,23 @@ export class RatesController {
 
   @Get()
   @Permissions(PERMISSIONS.RATES_MANAGE, PERMISSIONS.RATES_READ)
-  @ApiOperation({ summary: "Lista tarifas, con filtros e historial" })
+  @ApiOperation({ summary: "Lista tarifas, con filtros e historial (cada dispatcher ve solo las suyas; TENANT_ADMIN ve el historico completo)" })
   findAll(
     @TenantId() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
     @Query("projectId") projectId?: string,
     @Query("materialId") materialId?: string,
     @Query("originSiteId") originSiteId?: string,
     @Query("destinationSiteId") destinationSiteId?: string,
   ) {
-    return this.ratesService.findAll(tenantId, { projectId, materialId, originSiteId, destinationSiteId });
+    return this.ratesService.findAll(tenantId, { projectId, materialId, originSiteId, destinationSiteId }, user);
   }
 
   @Get(":id")
   @Permissions(PERMISSIONS.RATES_MANAGE, PERMISSIONS.RATES_READ)
   @ApiOperation({ summary: "Consulta una tarifa" })
-  findOne(@Param("id") id: string, @TenantId() tenantId: string) {
-    return this.ratesService.findById(tenantId, id);
+  findOne(@Param("id") id: string, @TenantId() tenantId: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.ratesService.findById(tenantId, id, user);
   }
 
   @Patch(":id/status")

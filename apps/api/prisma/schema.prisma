@@ -273,6 +273,7 @@ model User {
   managedVehicles     Vehicle[]       @relation("DispatcherVehicles")
   managedProjects     Project[]       @relation("DispatcherProjects")
   managedFleetOwners  FleetOwner[]    @relation("DispatcherFleetOwners")
+  managedRates        Rate[]          @relation("DispatcherRates")
   deletedDrivers      Driver[]        @relation("DriverDeletedBy")
   deletedVehicles     Vehicle[]       @relation("VehicleDeletedBy")
 
@@ -592,17 +593,24 @@ model Rate {
   createdAt          DateTime   @default(now())
   updatedAt          DateTime   @updatedAt
 
+  // Mismo patron que Driver.dispatcherId: null si la creo un TENANT_ADMIN.
+  // Cada DISPATCHER fija sus propias tarifas y solo ve/gestiona las suyas;
+  // TENANT_ADMIN ve todas sin restriccion (historico completo del tenant).
+  dispatcherId String?
+
   tenant          Tenant          @relation(fields: [tenantId], references: [id])
   project         Project         @relation(fields: [projectId], references: [id])
   originSite      OperationalSite @relation("RateOriginSite", fields: [originSiteId], references: [id])
   destinationSite OperationalSite @relation("RateDestinationSite", fields: [destinationSiteId], references: [id])
   material        Material        @relation(fields: [materialId], references: [id])
   fleetOwner      FleetOwner?     @relation(fields: [fleetOwnerId], references: [id])
+  dispatcher      User?           @relation("DispatcherRates", fields: [dispatcherId], references: [id])
 
   trips Trip[]
 
   @@index([tenantId, projectId, status])
   @@index([tenantId, originSiteId, destinationSiteId, materialId])
+  @@index([tenantId, dispatcherId])
 }
 
 // ---------------------------------------------------------------------------

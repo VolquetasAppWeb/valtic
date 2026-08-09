@@ -126,6 +126,7 @@ export default function RatesPage(): JSX.Element {
           <h1 className="text-2xl font-semibold tracking-tight">Tarifas</h1>
           <p className="text-sm text-muted-foreground">
             Tarifas por obra, origen, destino y material. No se editan: cada cambio crea una nueva tarifa versionada.
+            Cada dispatcher gestiona solo las suyas; el administrador ve el historico completo del tenant.
           </p>
         </div>
         <Button onClick={openCreate}>
@@ -203,6 +204,7 @@ export default function RatesPage(): JSX.Element {
                 <TableHead>Tipo</TableHead>
                 <TableHead>Valor</TableHead>
                 <TableHead>Vigencia</TableHead>
+                <TableHead>Dispatcher</TableHead>
                 <TableHead>Estado</TableHead>
                 <TableHead className="text-right">Acciones</TableHead>
               </TableRow>
@@ -219,6 +221,9 @@ export default function RatesPage(): JSX.Element {
                   <TableCell className="font-medium">{currencyFormatter.format(Number(rate.value))}</TableCell>
                   <TableCell className="text-muted-foreground">
                     {rate.validFrom.slice(0, 10)} {rate.validUntil ? `- ${rate.validUntil.slice(0, 10)}` : ""}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {rate.dispatcher ? `${rate.dispatcher.firstName} ${rate.dispatcher.lastName}` : "Admin"}
                   </TableCell>
                   <TableCell>
                     <StatusBadge status={rate.status} />

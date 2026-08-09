@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
+import { isDispatcherScoped } from "../../common/dispatcher-scope";
 import type { AuthenticatedUser } from "../../common/types/authenticated-user";
 import type { CreateRateDto } from "./dto/create-rate.dto";
 
@@ -34,6 +35,7 @@ export class RatesService {
         ...rest,
         validFrom: new Date(validFrom),
         validUntil: validUntil ? new Date(validUntil) : null,
+        dispatcherId: isDispatcherScoped(actor) ? actor.sub : null,
       },
     });
 
@@ -49,10 +51,11 @@ export class RatesService {
     return rate;
   }
 
-  async findAll(tenantId: string, filters: RateFilters) {
+  async findAll(tenantId: string, filters: RateFilters, actor: AuthenticatedUser) {
     return this.prisma.rate.findMany({
       where: {
         tenantId,
+        ...(isDispatcherScoped(actor) ? { dispatcherId: actor.sub } : {}),
         ...(filters.projectId ? { projectId: filters.projectId } : {}),
         ...(filters.materialId ? { materialId: filters.materialId } : {}),
         ...(filters.originSiteId ? { originSiteId: filters.originSiteId } : {}),
@@ -65,19 +68,21 @@ export class RatesService {
         destinationSite: { select: { id: true, name: true } },
         material: { select: { id: true, name: true } },
         fleetOwner: { select: { id: true, name: true } },
+        dispatcher: { select: { id: true, firstName: true, lastName: true } },
       },
     });
   }
 
-  async findById(tenantId: string, id: string) {
+  async findById(tenantId: string, id: string, actor: AuthenticatedUser) {
     const rate = await this.prisma.rate.findFirst({
-      where: { id, tenantId },
+      where: { id, tenantId, ...(isDispatcherScoped(actor) ? { dispatcherId: actor.sub } : {}) },
       include: {
         project: { select: { id: true, name: true } },
         originSite: { select: { id: true, name: true } },
         destinationSite: { select: { id: true, name: true } },
         material: { select: { id: true, name: true } },
         fleetOwner: { select: { id: true, name: true } },
+        dispatcher: { select: { id: true, firstName: true, lastName: true } },
       },
     });
     if (!rate) {
@@ -87,7 +92,9 @@ export class RatesService {
   }
 
   async updateStatus(tenantId: string, id: string, status: "ACTIVE" | "EXPIRED" | "INACTIVE", actor: AuthenticatedUser) {
-    const rate = await this.prisma.rate.findFirst({ where: { id, tenantId } });
+    const rate = await this.prisma.rate.findFirst({
+      where: { id, tenantId, ...(isDispatcherScoped(actor) ? { dispatcherId: actor.sub } : {}) },
+    });
     if (!rate) {
       throw new NotFoundException({ code: "RATE_NOT_FOUND", message: "Tarifa no encontrada." });
     }
