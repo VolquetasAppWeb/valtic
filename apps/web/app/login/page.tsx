@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { LogIn, Truck } from "lucide-react";
+import { Eye, EyeOff, LogIn, Truck } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { adminLoginSchema, type AdminLoginInput } from "@valtic/validation";
@@ -37,6 +37,7 @@ export default function LoginPage(): JSX.Element {
   const [serverError, setServerError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [openLegalDoc, setOpenLegalDoc] = useState<(typeof LEGAL_DOCUMENTS)[number] | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
 
   const {
     register,
@@ -96,14 +97,25 @@ export default function LoginPage(): JSX.Element {
                   ¿Olvidaste tu contrasena?
                 </a>
               </div>
-              <input
-                id="password"
-                type="password"
-                autoComplete="current-password"
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
-                placeholder="********"
-                {...register("password")}
-              />
+              <div className="relative">
+                <input
+                  id="password"
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="current-password"
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 pr-10 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
+                  placeholder="********"
+                  {...register("password")}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
+                  aria-label={showPassword ? "Ocultar contrasena" : "Mostrar contrasena"}
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
               {errors.password && <p className="text-xs text-destructive">{errors.password.message}</p>}
             </div>
 
