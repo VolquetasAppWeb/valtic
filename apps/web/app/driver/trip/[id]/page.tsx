@@ -341,8 +341,18 @@ export default function DriverTripDetailPage(): JSX.Element {
                     </p>
                   </div>
                 )}
+                <div className="flex items-start gap-3 rounded-md border-2 border-warning bg-warning/10 p-3">
+                  <AlertTriangle className="mt-0.5 h-6 w-6 shrink-0 text-warning" />
+                  <div>
+                    <p className="text-sm font-bold text-warning">Recuerda subir la foto del vale</p>
+                    <p className="text-xs text-warning">
+                      Antes de confirmar el cierre, toma o adjunta la foto del vale de despacho. Sin ella, el viaje
+                      puede quedar sin respaldo para la liquidacion.
+                    </p>
+                  </div>
+                </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="voucher-photo">Foto del vale (opcional)</Label>
+                  <Label htmlFor="voucher-photo">Foto del vale</Label>
                   <input
                     id="voucher-photo"
                     type="file"
@@ -352,8 +362,7 @@ export default function DriverTripDetailPage(): JSX.Element {
                     className="w-full text-sm"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Si tomas la foto aqui, el sistema intenta leer el valor automaticamente para que quede de
-                    referencia junto al viaje.
+                    El sistema intenta leer el valor automaticamente para que quede de referencia junto al viaje.
                   </p>
                 </div>
                 {qrError && <p className="text-sm text-destructive">{qrError}</p>}
