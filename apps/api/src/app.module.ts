@@ -29,6 +29,7 @@ import { LocationsModule } from "./modules/locations/locations.module";
 import { SyncModule } from "./modules/sync/sync.module";
 import { QrValidationModule } from "./modules/qr-validation/qr-validation.module";
 import { StorageModule } from "./common/storage/storage.module";
+import { OcrModule } from "./common/ocr/ocr.module";
 import { IncidentsModule } from "./modules/incidents/incidents.module";
 import { SettlementsModule } from "./modules/settlements/settlements.module";
 import { ReportsModule } from "./modules/reports/reports.module";
@@ -49,6 +50,7 @@ import { ReportsModule } from "./modules/reports/reports.module";
     PrismaModule,
     RedisModule,
     StorageModule,
+    OcrModule,
     HealthModule,
     AuditModule,
     MailModule,

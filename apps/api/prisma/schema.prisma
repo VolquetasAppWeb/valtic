@@ -223,6 +223,7 @@ model Tenant {
   drivers            Driver[]
   fleetOwners        FleetOwner[]
   vehicles           Vehicle[]
+  vehicleDocuments   VehicleDocument[]
   assignments        DriverVehicleAssignment[]
   projects           Project[]
   operationalSites   OperationalSite[]
@@ -274,6 +275,7 @@ model User {
   managedProjects     Project[]       @relation("DispatcherProjects")
   managedFleetOwners  FleetOwner[]    @relation("DispatcherFleetOwners")
   managedRates        Rate[]          @relation("DispatcherRates")
+  uploadedVehicleDocuments VehicleDocument[] @relation("VehicleDocumentUploadedBy")
   deletedDrivers      Driver[]        @relation("DriverDeletedBy")
   deletedVehicles     Vehicle[]       @relation("VehicleDeletedBy")
 
@@ -449,11 +451,18 @@ model Vehicle {
   fleetOwnerId String
   plate        String
   vehicleType  VehicleType
-  brand        String
-  model        String
+  // Marca, modelo(linea) y capacidad son opcionales: se pueden completar a
+  // mano o autocompletar leyendo la tarjeta de propiedad por OCR (ver
+  // VehicleDocument / POST /vehicles/extract-registration).
+  brand        String?
+  model        String?
   year         Int
-  capacity     Decimal       @db.Decimal(10, 2)
-  capacityUnit CapacityUnit
+  capacity     Decimal?      @db.Decimal(10, 2)
+  capacityUnit CapacityUnit?
+  // Numero de la tarjeta de propiedad ("LICENCIA DE TRANSITO No"). Sirve
+  // como identificador adicional del vehiculo, unico por tenant cuando se
+  // conoce; nullable porque no todos los vehiculos existentes lo tienen.
+  licenseNumber String?
   status       VehicleStatus @default(ACTIVE)
   // Mismo patron que Driver.dispatcherId: null si lo creo un TENANT_ADMIN.
   dispatcherId String?
@@ -475,11 +484,33 @@ model Vehicle {
   assignments DriverVehicleAssignment[]
   trips       Trip[]
   incidents   Incident[]
+  documents   VehicleDocument[]
 
   @@unique([tenantId, plate])
+  @@unique([tenantId, licenseNumber])
   @@index([tenantId, status])
   @@index([tenantId, dispatcherId])
   @@index([tenantId, deletedAt])
+}
+
+// Historico de fotos de tarjeta de propiedad subidas para un vehiculo (cada
+// vez que se sube una queda un registro nuevo, nunca se sobreescribe).
+model VehicleDocument {
+  id         String   @id @default(uuid())
+  tenantId   String
+  vehicleId  String
+  fileUrl    String
+  fileName   String
+  mimeType   String
+  fileSize   Int
+  uploadedById String?
+  createdAt  DateTime @default(now())
+
+  tenant     Tenant  @relation(fields: [tenantId], references: [id])
+  vehicle    Vehicle @relation(fields: [vehicleId], references: [id])
+  uploadedBy User?   @relation("VehicleDocumentUploadedBy", fields: [uploadedById], references: [id])
+
+  @@index([tenantId, vehicleId])
 }
 
 model DriverVehicleAssignment {

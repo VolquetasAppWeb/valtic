@@ -167,7 +167,7 @@ async function main(): Promise<void> {
       data: {
         tenantId: tenant.id,
         fleetOwnerId: fleetOwner.id,
-        plate: "ABC123",
+        plate: "ABC-123",
         vehicleType: "DUMP_TRUCK",
         brand: "Kenworth",
         model: "T800",
@@ -183,7 +183,7 @@ async function main(): Promise<void> {
       data: {
         tenantId: tenant.id,
         fleetOwnerId: fleetOwner.id,
-        plate: "DEF456",
+        plate: "DEF-456",
         vehicleType: "DUMP_TRUCK",
         brand: "International",
         model: "7600",
@@ -466,7 +466,7 @@ async function main(): Promise<void> {
   console.warn("DRIVER (PIN)    -> documento 1020304050 / PIN 123456");
   console.warn("DRIVER 2 (PIN)  -> documento 1030405060 / PIN 123456");
   console.warn("--- Datos operativos de demostracion ---");
-  console.warn("Propietario 'Transportes El Progreso' con 2 vehiculos (ABC123, DEF456)");
+  console.warn("Propietario 'Transportes El Progreso' con 2 vehiculos (ABC-123, DEF-456)");
   console.warn("Obra 'Via Perimetral Norte' con 2 puntos operativos y 1 tarifa PER_TRIP");
   console.warn("Todo lo anterior (conductores, vehiculos, obra) asignado al DISPATCHER de la semilla");
   console.warn("8 viajes: ASSIGNED, LOADING, COMPLETED, CANCELLED, MANUALLY_CLOSED, REJECTED y 2x SETTLED");

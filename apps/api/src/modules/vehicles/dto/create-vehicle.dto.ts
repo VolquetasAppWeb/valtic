@@ -1,8 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsIn, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, Min, MinLength } from "class-validator";
+import { IsIn, IsInt, IsNumber, IsOptional, IsString, IsUUID, Matches, Max, Min, MinLength } from "class-validator";
 
 const VEHICLE_TYPES = ["DUMP_TRUCK", "DOUBLE_TRAILER", "MINI_DUMP_TRUCK", "TRACTOR_TRAILER", "OTHER"] as const;
 const CAPACITY_UNITS = ["TON", "CUBIC_METER"] as const;
+// 3 letras + guion + 3 numeros (ej. "ABC-123"), formato estandar de placa
+// vehicular en Colombia para carga.
+const PLATE_PATTERN = /^[A-Za-z]{3}-\d{3}$/;
 
 export class CreateVehicleDto {
   @ApiPropertyOptional({
@@ -12,24 +15,26 @@ export class CreateVehicleDto {
   @IsUUID()
   fleetOwnerId?: string;
 
-  @ApiProperty({ example: "ABC123" })
+  @ApiProperty({ example: "ABC-123" })
   @IsString()
-  @MinLength(5)
+  @Matches(PLATE_PATTERN, { message: "La placa debe tener el formato XXX-111 (3 letras, guion, 3 numeros)." })
   plate!: string;
 
   @ApiProperty({ enum: VEHICLE_TYPES })
   @IsIn(VEHICLE_TYPES)
   vehicleType!: (typeof VEHICLE_TYPES)[number];
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
   @MinLength(1)
-  brand!: string;
+  brand?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
   @MinLength(1)
-  model!: string;
+  model?: string;
 
   @ApiProperty({ example: 2020 })
   @IsInt()
@@ -37,12 +42,23 @@ export class CreateVehicleDto {
   @Max(2100)
   year!: number;
 
-  @ApiProperty({ example: 14 })
+  @ApiPropertyOptional({ example: 14 })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  capacity!: number;
+  capacity?: number;
 
-  @ApiProperty({ enum: CAPACITY_UNITS })
+  @ApiPropertyOptional({ enum: CAPACITY_UNITS })
+  @IsOptional()
   @IsIn(CAPACITY_UNITS)
-  capacityUnit!: (typeof CAPACITY_UNITS)[number];
+  capacityUnit?: (typeof CAPACITY_UNITS)[number];
+
+  @ApiPropertyOptional({
+    example: "10034039969",
+    description: "Numero de la tarjeta de propiedad (LICENCIA DE TRANSITO No) — identifica el vehiculo",
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(3)
+  licenseNumber?: string;
 }

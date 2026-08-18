@@ -2,6 +2,8 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { PrismaService } from "../../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { FleetOwnersService } from "../fleet-owners/fleet-owners.service";
+import { StorageService } from "../../common/storage/storage.service";
+import { OcrService, type VehicleRegistrationExtraction } from "../../common/ocr/ocr.service";
 import { toPaginatedResponse } from "../../common/pagination";
 import { isDispatcherScoped } from "../../common/dispatcher-scope";
 import { IN_PROGRESS_STATUSES } from "../trips/domain/trip-state-machine";
@@ -17,6 +19,8 @@ export class VehiclesService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly fleetOwnersService: FleetOwnersService,
+    private readonly storageService: StorageService,
+    private readonly ocrService: OcrService,
   ) {}
 
   async create(tenantId: string, dto: CreateVehicleDto, actor: AuthenticatedUser) {
@@ -33,18 +37,39 @@ export class VehiclesService {
       await this.assertFleetOwnerBelongsToTenant(tenantId, fleetOwnerId, actor);
     }
 
+    const normalizedPlate = dto.plate.toUpperCase();
+
     const existingActive = await this.prisma.vehicle.findFirst({
-      where: { tenantId, plate: dto.plate.toUpperCase(), deletedAt: null },
+      where: { tenantId, plate: normalizedPlate, deletedAt: null },
     });
     if (existingActive) {
-      throw new ConflictException({ code: "VEHICLE_PLATE_TAKEN", message: "Ya existe un vehiculo con esa placa." });
+      const hint =
+        existingActive.status === "INACTIVE"
+          ? " Hay un vehiculo con esa placa marcado como inactivo — reactivalo en vez de crear uno nuevo, o eliminalo primero si ya no existe."
+          : "";
+      throw new ConflictException({
+        code: "VEHICLE_PLATE_TAKEN",
+        message: `Ya existe un vehiculo con esa placa.${hint}`,
+      });
+    }
+
+    if (dto.licenseNumber) {
+      const existingLicense = await this.prisma.vehicle.findFirst({
+        where: { tenantId, licenseNumber: dto.licenseNumber, deletedAt: null },
+      });
+      if (existingLicense) {
+        throw new ConflictException({
+          code: "VEHICLE_LICENSE_NUMBER_TAKEN",
+          message: "Ya existe un vehiculo con ese numero de licencia de transito.",
+        });
+      }
     }
 
     // Si la placa pertenece a un vehiculo eliminado, se restaura esa misma
     // fila en vez de crear una duplicada — asi conserva su historial de
     // viajes en lugar de perderlo.
     const existingDeleted = await this.prisma.vehicle.findFirst({
-      where: { tenantId, plate: dto.plate.toUpperCase(), deletedAt: { not: null } },
+      where: { tenantId, plate: normalizedPlate, deletedAt: { not: null } },
     });
 
     const data = {
@@ -218,6 +243,45 @@ export class VehiclesService {
     ]);
 
     return toPaginatedResponse(items, query.page, query.pageSize, totalItems);
+  }
+
+  // Lee una foto de tarjeta de propiedad y devuelve los campos que pudo
+  // identificar (placa, marca, linea, modelo/año, numero de licencia de
+  // transito), sin persistir nada — el formulario de creacion se autocompleta
+  // con esto pero el usuario puede corregirlo antes de confirmar.
+  async extractRegistration(file: Express.Multer.File): Promise<VehicleRegistrationExtraction> {
+    const rawText = await this.ocrService.extractText(file.buffer);
+    return this.ocrService.extractVehicleRegistration(rawText);
+  }
+
+  // Guarda la foto de tarjeta de propiedad en el historico del vehiculo
+  // (nunca sobreescribe: cada carga queda como una fila nueva).
+  async uploadDocument(tenantId: string, vehicleId: string, file: Express.Multer.File, actor: AuthenticatedUser) {
+    await this.assertExists(tenantId, vehicleId, actor);
+
+    const stored = await this.storageService.save(file, `vehicles/${vehicleId}/documents`);
+
+    return this.prisma.vehicleDocument.create({
+      data: {
+        tenantId,
+        vehicleId,
+        fileUrl: stored.fileUrl,
+        fileName: stored.fileName,
+        mimeType: stored.mimeType,
+        fileSize: stored.fileSize,
+        uploadedById: actor.kind === "user" ? actor.sub : null,
+      },
+    });
+  }
+
+  async listDocuments(tenantId: string, vehicleId: string, actor: AuthenticatedUser) {
+    await this.assertExists(tenantId, vehicleId, actor);
+
+    return this.prisma.vehicleDocument.findMany({
+      where: { tenantId, vehicleId },
+      orderBy: { createdAt: "desc" },
+      include: { uploadedBy: { select: { id: true, firstName: true, lastName: true } } },
+    });
   }
 
   private async assertExists(tenantId: string, id: string, actor: AuthenticatedUser) {

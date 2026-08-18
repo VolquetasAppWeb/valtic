@@ -56,14 +56,34 @@ export interface Vehicle {
   fleetOwnerId: string;
   plate: string;
   vehicleType: "DUMP_TRUCK" | "DOUBLE_TRAILER" | "MINI_DUMP_TRUCK" | "TRACTOR_TRAILER" | "OTHER";
-  brand: string;
-  model: string;
+  brand: string | null;
+  model: string | null;
   year: number;
-  capacity: string;
-  capacityUnit: "TON" | "CUBIC_METER";
+  capacity: string | null;
+  capacityUnit: "TON" | "CUBIC_METER" | null;
+  licenseNumber: string | null;
   status: "ACTIVE" | "MAINTENANCE" | "INACTIVE";
   fleetOwner?: { id: string; name: string };
   assignments?: DriverVehicleAssignmentRef[];
+}
+
+export interface VehicleDocument {
+  id: string;
+  vehicleId: string;
+  fileUrl: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  createdAt: string;
+  uploadedBy: { id: string; firstName: string; lastName: string } | null;
+}
+
+export interface VehicleRegistrationExtraction {
+  plate: string | null;
+  brand: string | null;
+  line: string | null;
+  modelYear: string | null;
+  licenseNumber: string | null;
 }
 
 export interface DeletedVehicle extends Vehicle {
@@ -177,7 +197,7 @@ export interface Trip {
   voucherUploadedAt: string | null;
   createdAt: string;
   driver: { id: string; firstName: string; lastName: string; documentNumber: string; phone: string };
-  vehicle: { id: string; plate: string; vehicleType: string; capacity: string; capacityUnit: string };
+  vehicle: { id: string; plate: string; vehicleType: string; capacity: string | null; capacityUnit: string | null };
   fleetOwner: { id: string; name: string };
   project: { id: string; name: string; code: string };
   originSite: { id: string; name: string; address: string; latitude: number; longitude: number; geofenceRadius: number };

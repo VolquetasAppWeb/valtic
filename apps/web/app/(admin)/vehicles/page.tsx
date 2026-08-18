@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Archive, Pencil, Plus, Power, PowerOff, Trash2, Truck, UserCog } from "lucide-react";
+import { Archive, FileImage, Pencil, Plus, Power, PowerOff, ScanLine, Trash2, Truck, UserCog } from "lucide-react";
 import { PERMISSIONS } from "@valtic/types";
 import { vehicleSchema, type VehicleInput } from "@valtic/validation";
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,17 @@ import { StatusBadge } from "@/components/admin/status-badge";
 import { apiClient, ApiError } from "@/lib/api-client";
 import { useAuthStore } from "@/stores/auth-store";
 import { usePermissions } from "@/hooks/use-permissions";
-import type { DeletedVehicle, Driver, FleetOwner, PaginatedResult, Vehicle } from "@/lib/api-types";
+import type {
+  DeletedVehicle,
+  Driver,
+  FleetOwner,
+  PaginatedResult,
+  Vehicle,
+  VehicleDocument,
+  VehicleRegistrationExtraction,
+} from "@/lib/api-types";
+
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001/api/v1").replace(/\/api\/v1\/?$/, "");
 
 const VEHICLE_TYPE_LABEL: Record<string, string> = {
   DUMP_TRUCK: "Volqueta",
@@ -30,6 +40,15 @@ const VEHICLE_TYPE_LABEL: Record<string, string> = {
   TRACTOR_TRAILER: "Tractomula",
   OTHER: "Otro",
 };
+
+// Si el OCR leyo "ABC123" (sin guion) se lo agrega para que calce con el
+// formato exigido por el formulario (XXX-111); si no calza con ese patron
+// se deja tal cual para que el usuario la corrija a mano.
+function formatPlateGuess(raw: string): string {
+  const compact = raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const match = /^([A-Z]{3})(\d{3})$/.exec(compact);
+  return match ? `${match[1]}-${match[2]}` : raw;
+}
 
 export default function VehiclesPage(): JSX.Element {
   const queryClient = useQueryClient();
@@ -46,6 +65,9 @@ export default function VehiclesPage(): JSX.Element {
   const [deleteReason, setDeleteReason] = useState("");
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletedLogOpen, setDeletedLogOpen] = useState(false);
+  const [registrationFile, setRegistrationFile] = useState<File | null>(null);
+  const [extractError, setExtractError] = useState<string | null>(null);
+  const [documentsVehicle, setDocumentsVehicle] = useState<Vehicle | null>(null);
 
   const [search, setSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
@@ -78,6 +100,12 @@ export default function VehiclesPage(): JSX.Element {
     enabled: deletedLogOpen && canSeeDeletedLog,
   });
 
+  const { data: documentsData, isLoading: loadingDocuments } = useQuery({
+    queryKey: ["vehicles", "documents", documentsVehicle?.id],
+    queryFn: () => apiClient.get<VehicleDocument[]>(`/vehicles/${documentsVehicle!.id}/documents`),
+    enabled: !!documentsVehicle,
+  });
+
   const {
     register,
     handleSubmit,
@@ -90,6 +118,8 @@ export default function VehiclesPage(): JSX.Element {
   function openCreate(): void {
     setEditing(null);
     setFormError(null);
+    setRegistrationFile(null);
+    setExtractError(null);
     const owners = ownersData?.data ?? [];
     const selfOwnerId = isDispatcher ? (owners.find((o) => o.userId === currentUser?.id)?.id ?? "") : "";
     reset({
@@ -99,8 +129,9 @@ export default function VehiclesPage(): JSX.Element {
       brand: "",
       model: "",
       year: new Date().getFullYear(),
-      capacity: 0,
+      capacity: undefined,
       capacityUnit: "TON",
+      licenseNumber: "",
     });
     setDialogOpen(true);
   }
@@ -108,25 +139,73 @@ export default function VehiclesPage(): JSX.Element {
   function openEdit(vehicle: Vehicle): void {
     setEditing(vehicle);
     setFormError(null);
+    setRegistrationFile(null);
+    setExtractError(null);
     reset({
       fleetOwnerId: vehicle.fleetOwnerId,
       plate: vehicle.plate,
       vehicleType: vehicle.vehicleType,
-      brand: vehicle.brand,
-      model: vehicle.model,
+      brand: vehicle.brand ?? "",
+      model: vehicle.model ?? "",
       year: vehicle.year,
-      capacity: Number(vehicle.capacity),
-      capacityUnit: vehicle.capacityUnit,
+      capacity: vehicle.capacity ? Number(vehicle.capacity) : undefined,
+      capacityUnit: vehicle.capacityUnit ?? "TON",
+      licenseNumber: vehicle.licenseNumber ?? "",
     });
     setDialogOpen(true);
   }
 
+  const extractMutation = useMutation({
+    mutationFn: (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      return apiClient.post<VehicleRegistrationExtraction>("/vehicles/extract-registration", formData);
+    },
+    onSuccess: (extracted) => {
+      if (extracted.plate) setValue("plate", formatPlateGuess(extracted.plate));
+      if (extracted.brand) setValue("brand", extracted.brand);
+      if (extracted.line) setValue("model", extracted.line);
+      if (extracted.modelYear) setValue("year", Number(extracted.modelYear));
+      if (extracted.licenseNumber) setValue("licenseNumber", extracted.licenseNumber);
+      if (!extracted.plate && !extracted.brand && !extracted.line && !extracted.licenseNumber) {
+        setExtractError("No se pudo leer la foto automaticamente. Completa los datos a mano.");
+      } else {
+        setExtractError(null);
+      }
+    },
+    onError: () => setExtractError("No se pudo leer la foto automaticamente. Completa los datos a mano."),
+  });
+
+  function onRegistrationFileChange(file: File | null): void {
+    setRegistrationFile(file);
+    setExtractError(null);
+    if (file) {
+      extractMutation.mutate(file);
+    }
+  }
+
   const saveMutation = useMutation({
-    mutationFn: (values: VehicleInput) => {
-      const payload = { ...values, fleetOwnerId: values.fleetOwnerId || undefined };
-      return editing
-        ? apiClient.patch<Vehicle>(`/vehicles/${editing.id}`, payload)
-        : apiClient.post<Vehicle>("/vehicles", payload);
+    mutationFn: async (values: VehicleInput) => {
+      const payload = {
+        ...values,
+        fleetOwnerId: values.fleetOwnerId || undefined,
+        brand: values.brand || undefined,
+        model: values.model || undefined,
+        capacity: values.capacity || undefined,
+        capacityUnit: values.capacityUnit || undefined,
+        licenseNumber: values.licenseNumber || undefined,
+      };
+      const vehicle = editing
+        ? await apiClient.patch<Vehicle>(`/vehicles/${editing.id}`, payload)
+        : await apiClient.post<Vehicle>("/vehicles", payload);
+
+      if (registrationFile) {
+        const formData = new FormData();
+        formData.append("file", registrationFile);
+        await apiClient.post(`/vehicles/${vehicle.id}/documents`, formData);
+      }
+
+      return vehicle;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["vehicles"] });
@@ -267,10 +346,10 @@ export default function VehiclesPage(): JSX.Element {
                     <TableCell className="font-medium">{vehicle.plate}</TableCell>
                     <TableCell className="text-muted-foreground">{VEHICLE_TYPE_LABEL[vehicle.vehicleType]}</TableCell>
                     <TableCell className="text-muted-foreground">
-                      {vehicle.brand} {vehicle.model} ({vehicle.year})
+                      {[vehicle.brand, vehicle.model].filter(Boolean).join(" ") || "—"} ({vehicle.year})
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {vehicle.capacity} {vehicle.capacityUnit === "TON" ? "ton" : "m3"}
+                      {vehicle.capacity ? `${vehicle.capacity} ${vehicle.capacityUnit === "TON" ? "ton" : "m3"}` : "—"}
                     </TableCell>
                     <TableCell className="text-muted-foreground">{vehicle.fleetOwner?.name}</TableCell>
                     <TableCell className="text-muted-foreground">
@@ -291,6 +370,14 @@ export default function VehiclesPage(): JSX.Element {
                         </Button>
                         <Button variant="ghost" size="icon" onClick={() => openEdit(vehicle)} aria-label="Editar">
                           <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Ver documentos"
+                          onClick={() => setDocumentsVehicle(vehicle)}
+                        >
+                          <FileImage className="h-4 w-4" />
                         </Button>
                         <Button
                           variant="ghost"
@@ -330,6 +417,27 @@ export default function VehiclesPage(): JSX.Element {
             <DialogTitle>{editing ? "Editar vehiculo" : "Nuevo vehiculo"}</DialogTitle>
           </DialogHeader>
           <form className="space-y-4" onSubmit={handleSubmit(onSubmit)}>
+            {!editing && (
+              <div className="space-y-1.5 rounded-md border border-border bg-secondary/40 p-3">
+                <Label htmlFor="registration-photo" className="flex items-center gap-1.5">
+                  <ScanLine className="h-4 w-4" />
+                  Foto de la tarjeta de propiedad (opcional)
+                </Label>
+                <input
+                  id="registration-photo"
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => onRegistrationFileChange(e.target.files?.[0] ?? null)}
+                  className="w-full text-sm"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Si subes la foto, el sistema intenta leer placa, marca, linea, modelo y numero de licencia de
+                  transito para completar el formulario — revisa los datos antes de guardar.
+                </p>
+                {extractMutation.isPending && <p className="text-xs text-muted-foreground">Leyendo la foto...</p>}
+                {extractError && <p className="text-xs text-warning">{extractError}</p>}
+              </div>
+            )}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label>Propietario</Label>
@@ -355,9 +463,14 @@ export default function VehiclesPage(): JSX.Element {
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="plate">Placa</Label>
-                <Input id="plate" {...register("plate")} />
+                <Input id="plate" placeholder="XXX-111" {...register("plate")} />
                 {errors.plate && <p className="text-xs text-destructive">{errors.plate.message}</p>}
               </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="licenseNumber">Numero de licencia de transito (opcional)</Label>
+              <Input id="licenseNumber" {...register("licenseNumber")} />
+              {errors.licenseNumber && <p className="text-xs text-destructive">{errors.licenseNumber.message}</p>}
             </div>
             <div className="space-y-1.5">
               <Label>Tipo de vehiculo</Label>
@@ -379,11 +492,11 @@ export default function VehiclesPage(): JSX.Element {
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <div className="space-y-1.5">
-                <Label htmlFor="brand">Marca</Label>
+                <Label htmlFor="brand">Marca (opcional)</Label>
                 <Input id="brand" {...register("brand")} />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="model">Modelo</Label>
+                <Label htmlFor="model">Linea/Modelo (opcional)</Label>
                 <Input id="model" {...register("model")} />
               </div>
               <div className="space-y-1.5">
@@ -393,7 +506,7 @@ export default function VehiclesPage(): JSX.Element {
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label htmlFor="capacity">Capacidad</Label>
+                <Label htmlFor="capacity">Capacidad (opcional)</Label>
                 <Input id="capacity" type="number" step="0.01" {...register("capacity")} />
               </div>
               <div className="space-y-1.5">
@@ -489,6 +602,48 @@ export default function VehiclesPage(): JSX.Element {
                 {deleteMutation.isPending ? "Eliminando..." : "Eliminar vehiculo"}
               </Button>
             </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!documentsVehicle} onOpenChange={(open) => !open && setDocumentsVehicle(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Documentos de {documentsVehicle?.plate}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Historico de fotos de tarjeta de propiedad subidas para este vehiculo.
+            </p>
+            {loadingDocuments ? (
+              <Skeleton className="h-24 w-full" />
+            ) : !documentsData || documentsData.length === 0 ? (
+              <EmptyState
+                icon={FileImage}
+                title="Sin documentos"
+                description="Aun no se ha subido ninguna foto de tarjeta de propiedad."
+              />
+            ) : (
+              <div className="max-h-[60vh] space-y-2 overflow-y-auto">
+                {documentsData.map((doc) => (
+                  <a
+                    key={doc.id}
+                    href={`${API_ORIGIN}${doc.fileUrl}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-3 rounded-md border border-border p-2 hover:bg-secondary/40"
+                  >
+                    <img src={`${API_ORIGIN}${doc.fileUrl}`} alt={doc.fileName} className="h-14 w-14 rounded object-cover" />
+                    <div className="text-xs text-muted-foreground">
+                      <p>{new Date(doc.createdAt).toLocaleString("es-CO")}</p>
+                      <p>
+                        {doc.uploadedBy ? `${doc.uploadedBy.firstName} ${doc.uploadedBy.lastName}` : "—"}
+                      </p>
+                    </div>
+                  </a>
+                ))}
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>

@@ -162,7 +162,9 @@ export default function TripDetailPage(): JSX.Element {
             <div>
               <p className="text-muted-foreground">Vehiculo</p>
               <p className="font-medium">{trip.vehicle.plate}</p>
-              <p className="text-xs text-muted-foreground">{trip.vehicle.capacity} {trip.vehicle.capacityUnit}</p>
+              {trip.vehicle.capacity && (
+                <p className="text-xs text-muted-foreground">{trip.vehicle.capacity} {trip.vehicle.capacityUnit}</p>
+              )}
             </div>
             <div>
               <p className="text-muted-foreground">Propietario</p>

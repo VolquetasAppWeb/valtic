@@ -4,7 +4,7 @@ import { PrismaService } from "../../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { TripEventsService } from "../trip-events/trip-events.service";
 import { StorageService } from "../../common/storage/storage.service";
-import { OcrService } from "./ocr/ocr.service";
+import { OcrService } from "../../common/ocr/ocr.service";
 import { toPaginatedResponse } from "../../common/pagination";
 import { assertValidTransition, isTerminalStatus } from "./domain/trip-state-machine";
 import { DRIVER_ACTION_SPEC, DRIVER_PROGRESS_ORDER, type DriverActionType } from "./domain/driver-actions";

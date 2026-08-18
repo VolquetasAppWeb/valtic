@@ -42,13 +42,16 @@ export const vehicleSchema = z.object({
   // automaticamente su propio propietario. Para TENANT_ADMIN la pagina
   // exige seleccionarlo en la UI antes de enviar.
   fleetOwnerId: z.string().uuid("Selecciona un propietario").optional().or(z.literal("")),
-  plate: z.string().min(5, "Placa invalida"),
+  plate: z
+    .string()
+    .regex(/^[A-Za-z]{3}-\d{3}$/, "Formato de placa invalido. Usa XXX-111 (3 letras, guion, 3 numeros)."),
   vehicleType: z.enum(["DUMP_TRUCK", "DOUBLE_TRAILER", "MINI_DUMP_TRUCK", "TRACTOR_TRAILER", "OTHER"]),
-  brand: z.string().min(1, "Requerido"),
-  model: z.string().min(1, "Requerido"),
+  brand: z.string().optional().or(z.literal("")),
+  model: z.string().optional().or(z.literal("")),
   year: z.coerce.number().int().min(1970).max(2100),
-  capacity: z.coerce.number().min(0),
-  capacityUnit: z.enum(["TON", "CUBIC_METER"]),
+  capacity: z.coerce.number().min(0).optional(),
+  capacityUnit: z.enum(["TON", "CUBIC_METER"]).optional().or(z.literal("")),
+  licenseNumber: z.string().optional().or(z.literal("")),
 });
 export type VehicleInput = z.infer<typeof vehicleSchema>;
 
