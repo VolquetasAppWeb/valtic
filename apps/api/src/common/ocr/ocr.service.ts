@@ -35,28 +35,54 @@ const KNOWN_LABELS: Record<string, string> = {
   observaciones: "Observaciones",
 };
 
+// createWorker puede colgarse indefinidamente (ej. si no logra descargar el
+// modelo de idioma) sin lanzar una excepcion que el try/catch pueda atrapar
+// — por eso el limite de tiempo es imprescindible, no solo una optimizacion.
+const OCR_TIMEOUT_MS = 20_000;
+
 @Injectable()
 export class OcrService {
   private readonly logger = new Logger(OcrService.name);
 
-  // Corre OCR sobre una foto (vale, tarjeta de propiedad, etc). Si falla
-  // (foto ilegible, error del motor), no debe tumbar el flujo que la usa --
-  // el archivo se guarda igual, solo sin texto extraido.
+  // Corre OCR sobre una foto (vale, tarjeta de propiedad, etc). Si falla o
+  // se demora demasiado (foto ilegible, error del motor, sin red para bajar
+  // el modelo de idioma), no debe tumbar ni colgar el flujo que la usa -- el
+  // archivo se guarda igual, solo sin texto extraido.
   async extractText(imageBuffer: Buffer): Promise<string> {
     try {
-      const worker = await createWorker("spa");
-      try {
-        const {
-          data: { text },
-        } = await worker.recognize(imageBuffer);
-        return text;
-      } finally {
-        await worker.terminate();
-      }
+      return await this.withTimeout(this.runOcr(imageBuffer), OCR_TIMEOUT_MS);
     } catch (error) {
       this.logger.warn(`OCR fallo sobre la foto: ${(error as Error).message}`);
       return "";
     }
+  }
+
+  private async runOcr(imageBuffer: Buffer): Promise<string> {
+    const worker = await createWorker("spa");
+    try {
+      const {
+        data: { text },
+      } = await worker.recognize(imageBuffer);
+      return text;
+    } finally {
+      await worker.terminate();
+    }
+  }
+
+  private withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`OCR excedio el limite de ${ms}ms`)), ms);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
   }
 
   // Los vales tipo "recibo de entrega de material" (ej. Dromos) no traen
