@@ -10,6 +10,20 @@ import { AppModule } from "./app.module";
 import type { AppConfig } from "./config/configuration";
 
 async function bootstrap() {
+  const bootLogger = new Logger("Process");
+  // Desde Node 15, un unhandledRejection sin listener tumba todo el proceso
+  // por defecto. tesseract.js dispara internamente rechazos que no siempre
+  // quedan encadenados a la promesa que se espera (ver OcrService) — sin
+  // este listener, una sola foto puede reiniciar el API completo para todos
+  // los usuarios. No reemplaza arreglar la causa raiz, pero evita que un
+  // rechazo no atrapado en cualquier parte tumbe el servicio entero.
+  process.on("unhandledRejection", (reason) => {
+    bootLogger.error(`unhandledRejection: ${reason instanceof Error ? reason.stack : String(reason)}`);
+  });
+  process.on("uncaughtException", (error) => {
+    bootLogger.error(`uncaughtException: ${error.stack}`);
+  });
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const configService = app.get(ConfigService<AppConfig, true>);
 
