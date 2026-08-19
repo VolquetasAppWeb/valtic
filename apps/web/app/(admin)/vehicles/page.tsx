@@ -4,7 +4,20 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Archive, FileImage, Pencil, Plus, Power, PowerOff, ScanLine, Trash2, Truck, UserCog } from "lucide-react";
+import {
+  Archive,
+  Camera,
+  FileImage,
+  Image as ImageIcon,
+  Pencil,
+  Plus,
+  Power,
+  PowerOff,
+  ScanLine,
+  Trash2,
+  Truck,
+  UserCog,
+} from "lucide-react";
 import { PERMISSIONS } from "@valtic/types";
 import { vehicleSchema, type VehicleInput } from "@valtic/validation";
 import { Button } from "@/components/ui/button";
@@ -221,6 +234,10 @@ export default function VehiclesPage(): JSX.Element {
       setFormError("Selecciona un propietario.");
       return;
     }
+    if (!editing && !registrationFile) {
+      setFormError("Sube la foto de la tarjeta de propiedad para registrar el vehiculo.");
+      return;
+    }
     setFormError(null);
     saveMutation.mutate(values);
   }
@@ -419,20 +436,53 @@ export default function VehiclesPage(): JSX.Element {
           <form className="space-y-4" onSubmit={handleSubmit(onSubmit)}>
             {!editing && (
               <div className="space-y-1.5 rounded-md border border-border bg-secondary/40 p-3">
-                <Label htmlFor="registration-photo" className="flex items-center gap-1.5">
+                <Label className="flex items-center gap-1.5">
                   <ScanLine className="h-4 w-4" />
-                  Foto de la tarjeta de propiedad (opcional)
+                  Foto de la tarjeta de propiedad (obligatoria)
                 </Label>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="flex-1"
+                    onClick={() => document.getElementById("registration-photo-camera")?.click()}
+                  >
+                    <Camera className="h-4 w-4" />
+                    Tomar foto
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="flex-1"
+                    onClick={() => document.getElementById("registration-photo-gallery")?.click()}
+                  >
+                    <ImageIcon className="h-4 w-4" />
+                    Elegir de galeria
+                  </Button>
+                </div>
+                {/* Dos inputs separados: "capture" fuerza la camara en movil,
+                    sin "capture" el sistema ofrece la galeria/archivos. */}
                 <input
-                  id="registration-photo"
+                  id="registration-photo-camera"
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={(e) => onRegistrationFileChange(e.target.files?.[0] ?? null)}
+                  className="hidden"
+                />
+                <input
+                  id="registration-photo-gallery"
                   type="file"
                   accept="image/*"
                   onChange={(e) => onRegistrationFileChange(e.target.files?.[0] ?? null)}
-                  className="w-full text-sm"
+                  className="hidden"
                 />
+                {registrationFile && (
+                  <p className="text-xs text-muted-foreground">Foto seleccionada: {registrationFile.name}</p>
+                )}
                 <p className="text-xs text-muted-foreground">
-                  Si subes la foto, el sistema intenta leer placa, marca, linea, modelo y numero de licencia de
-                  transito para completar el formulario — revisa los datos antes de guardar.
+                  El sistema intenta leer placa, marca, linea, modelo y numero de licencia de transito para
+                  completar el formulario — revisa los datos antes de guardar.
                 </p>
                 {extractMutation.isPending && <p className="text-xs text-muted-foreground">Leyendo la foto...</p>}
                 {extractError && <p className="text-xs text-warning">{extractError}</p>}

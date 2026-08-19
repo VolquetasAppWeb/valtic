@@ -250,8 +250,8 @@ export class VehiclesService {
   // transito), sin persistir nada — el formulario de creacion se autocompleta
   // con esto pero el usuario puede corregirlo antes de confirmar.
   async extractRegistration(file: Express.Multer.File): Promise<VehicleRegistrationExtraction> {
-    const rawText = await this.ocrService.extractText(file.buffer);
-    return this.ocrService.extractVehicleRegistration(rawText);
+    const { extraction } = await this.ocrService.extractVehicleRegistrationFromImage(file.buffer);
+    return extraction;
   }
 
   // Guarda la foto de tarjeta de propiedad en el historico del vehiculo
