@@ -44,6 +44,11 @@ export default function DriverHomePage(): JSX.Element {
               Hola, {driver?.firstName ?? "conductor"}
             </CardTitle>
             <p className="text-xs text-muted-foreground">Documento {driver?.documentNumber}</p>
+            {driver?.dispatcherName && (
+              <p className="mt-1 inline-block rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-secondary-foreground">
+                Cuenta de {driver.dispatcherName}
+              </p>
+            )}
           </div>
           <Button variant="ghost" size="icon" onClick={handleLogout} aria-label="Cerrar sesion">
             <LogOut className="h-4 w-4" />

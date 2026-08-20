@@ -38,9 +38,15 @@ export class VehiclesService {
     }
 
     const normalizedPlate = dto.plate.toUpperCase();
+    // Misma placa/licencia se scopea por dispatcher (ver @@unique en el
+    // schema): cada DISPATCHER puede registrar su propia copia del mismo
+    // vehiculo real sin chocar con otro, ni ver la del otro. Para
+    // TENANT_ADMIN (dispatcherId null) esto revalida a mano, ya que Postgres
+    // no trata dos NULL como iguales en el unique constraint.
+    const scopeDispatcherId = isDispatcherScoped(actor) ? actor.sub : null;
 
     const existingActive = await this.prisma.vehicle.findFirst({
-      where: { tenantId, plate: normalizedPlate, deletedAt: null },
+      where: { tenantId, dispatcherId: scopeDispatcherId, plate: normalizedPlate, deletedAt: null },
     });
     if (existingActive) {
       const hint =
@@ -55,7 +61,7 @@ export class VehiclesService {
 
     if (dto.licenseNumber) {
       const existingLicense = await this.prisma.vehicle.findFirst({
-        where: { tenantId, licenseNumber: dto.licenseNumber, deletedAt: null },
+        where: { tenantId, dispatcherId: scopeDispatcherId, licenseNumber: dto.licenseNumber, deletedAt: null },
       });
       if (existingLicense) {
         throw new ConflictException({
@@ -65,18 +71,18 @@ export class VehiclesService {
       }
     }
 
-    // Si la placa pertenece a un vehiculo eliminado, se restaura esa misma
-    // fila en vez de crear una duplicada — asi conserva su historial de
-    // viajes en lugar de perderlo.
+    // Si la placa pertenece a un vehiculo eliminado (de este mismo
+    // dispatcher/admin), se restaura esa misma fila en vez de crear una
+    // duplicada — asi conserva su historial de viajes en lugar de perderlo.
     const existingDeleted = await this.prisma.vehicle.findFirst({
-      where: { tenantId, plate: normalizedPlate, deletedAt: { not: null } },
+      where: { tenantId, dispatcherId: scopeDispatcherId, plate: normalizedPlate, deletedAt: { not: null } },
     });
 
     const data = {
       ...dto,
       fleetOwnerId,
       plate: dto.plate.toUpperCase(),
-      dispatcherId: isDispatcherScoped(actor) ? actor.sub : null,
+      dispatcherId: scopeDispatcherId,
       status: "ACTIVE" as const,
       deletedAt: null,
       deletedById: null,

@@ -23,6 +23,7 @@ interface DriverLoginResponse {
     lastName: string;
     documentNumber: string;
     permissions: string[];
+    dispatcherName: string | null;
   };
 }
 

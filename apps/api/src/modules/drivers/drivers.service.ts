@@ -83,18 +83,25 @@ export class DriversService {
   }
 
   async create(tenantId: string, dto: CreateDriverDto, actor: AuthenticatedUser) {
+    // Mismo documento se scopea por dispatcher (ver @@unique en el schema):
+    // cada DISPATCHER puede registrar su propia copia del mismo conductor
+    // real sin chocar con otro, ni ver el del otro. Para TENANT_ADMIN
+    // (dispatcherId null) esto revalida a mano, ya que Postgres no trata dos
+    // NULL como iguales en el unique constraint.
+    const scopeDispatcherId = isDispatcherScoped(actor) ? actor.sub : null;
+
     const existingActive = await this.prisma.driver.findFirst({
-      where: { tenantId, documentNumber: dto.documentNumber, deletedAt: null },
+      where: { tenantId, dispatcherId: scopeDispatcherId, documentNumber: dto.documentNumber, deletedAt: null },
     });
     if (existingActive) {
       throw new ConflictException({ code: "DRIVER_DOCUMENT_TAKEN", message: "Ya existe un conductor con ese documento." });
     }
 
-    // Si el documento pertenece a un conductor eliminado (p. ej. lo despidieron
-    // y vuelve), se restaura esa misma fila en vez de crear una duplicada —
-    // asi conserva su historial de viajes en lugar de perderlo.
+    // Si el documento pertenece a un conductor eliminado (de este mismo
+    // dispatcher/admin), se restaura esa misma fila en vez de crear una
+    // duplicada — asi conserva su historial de viajes en lugar de perderlo.
     const existingDeleted = await this.prisma.driver.findFirst({
-      where: { tenantId, documentNumber: dto.documentNumber, deletedAt: { not: null } },
+      where: { tenantId, dispatcherId: scopeDispatcherId, documentNumber: dto.documentNumber, deletedAt: { not: null } },
     });
 
     const { licenseExpiration, licenseCategories, ...rest } = dto;
@@ -111,7 +118,7 @@ export class DriversService {
       licenseCategories: licenseCategories as unknown as Prisma.InputJsonValue | undefined,
       pinHash,
       pinEncrypted,
-      dispatcherId: isDispatcherScoped(actor) ? actor.sub : null,
+      dispatcherId: scopeDispatcherId,
       status: "ACTIVE" as const,
       deletedAt: null,
       deletedById: null,

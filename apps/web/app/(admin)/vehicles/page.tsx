@@ -15,6 +15,7 @@ import {
   Trash2,
   Truck,
   UserCog,
+  UserX,
 } from "lucide-react";
 import { PERMISSIONS } from "@valtic/types";
 import { Button } from "@/components/ui/button";
@@ -267,6 +268,14 @@ export default function VehiclesPage(): JSX.Element {
     },
   });
 
+  const unassignMutation = useMutation({
+    mutationFn: (assignmentId: string) => apiClient.patch(`/driver-vehicle-assignments/${assignmentId}/end`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["vehicles"] });
+      queryClient.invalidateQueries({ queryKey: ["drivers"] });
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) =>
       apiClient.delete<void>(`/vehicles/${id}`, { body: reason ? { reason } : {} }),
@@ -372,7 +381,8 @@ export default function VehiclesPage(): JSX.Element {
             </TableHeader>
             <TableBody>
               {vehicles.map((vehicle) => {
-                const currentDriver = vehicle.assignments?.find((a) => a.active)?.driver;
+                const currentAssignment = vehicle.assignments?.find((a) => a.active);
+                const currentDriver = currentAssignment?.driver;
                 return (
                   <TableRow key={vehicle.id}>
                     <TableCell className="font-medium">{vehicle.plate}</TableCell>
@@ -410,6 +420,17 @@ export default function VehiclesPage(): JSX.Element {
                         >
                           <UserCog className="h-4 w-4" />
                         </Button>
+                        {currentAssignment && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label="Desasignar conductor"
+                            disabled={unassignMutation.isPending}
+                            onClick={() => unassignMutation.mutate(currentAssignment.id)}
+                          >
+                            <UserX className="h-4 w-4" />
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon"

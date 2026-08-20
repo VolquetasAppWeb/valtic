@@ -42,6 +42,12 @@ export interface DriverLoginResult extends LoginResult {
     lastName: string;
     documentNumber: string;
     permissions: PermissionKey[];
+    // Nombre del despachador dueno de este registro, o null si lo creo un
+    // TENANT_ADMIN (ver Driver.dispatcherId) — el mismo numero de documento
+    // puede existir en varias cuentas de despachador a la vez (cada una con
+    // su propio PIN), asi que se muestra en el dashboard del conductor para
+    // que quede claro a que cuenta pertenece la sesion actual.
+    dispatcherName: string | null;
   };
 }
 
@@ -171,53 +177,77 @@ export class AuthService {
   async driverLogin(documentOrPhone: string, pin: string, meta: RequestMeta): Promise<DriverLoginResult> {
     // El telefono ya no es un campo del conductor (se elimino: no aparece
     // en cedula ni licencia) — el login queda solo por numero de documento.
-    const driver = await this.prisma.driver.findFirst({
+    // Un mismo numero de documento puede existir en varias filas a la vez
+    // (una por cada DISPATCHER que registro a este conductor, cada una con
+    // su propio PIN — ver Driver.dispatcherId), asi que se buscan todas las
+    // que coincidan y se identifica la correcta por PIN.
+    const candidates = await this.prisma.driver.findMany({
       where: { documentNumber: documentOrPhone, status: "ACTIVE" },
+      include: { dispatcher: { select: { firstName: true, lastName: true } } },
     });
 
-    if (!driver) {
+    if (candidates.length === 0) {
       throw new UnauthorizedException({ code: "AUTH_INVALID_CREDENTIALS", message: "Credenciales invalidas." });
     }
 
     const lockConfig = this.configService.get("driverPin", { infer: true });
+    const now = new Date();
+    const unlocked = candidates.filter((c) => !c.pinLockedUntil || c.pinLockedUntil <= now);
 
-    if (driver.pinLockedUntil && driver.pinLockedUntil > new Date()) {
+    if (unlocked.length === 0) {
+      // Todas las filas que comparten este documento estan bloqueadas —
+      // se informa con el desbloqueo mas proximo.
+      const soonest = candidates.reduce((min, c) => (c.pinLockedUntil! < min ? c.pinLockedUntil! : min), candidates[0]!.pinLockedUntil!);
       await this.auditService.record({
-        tenantId: driver.tenantId,
+        tenantId: candidates[0]!.tenantId,
         action: "AUTH_DRIVER_PIN_LOCKED",
         entityType: "Driver",
-        entityId: driver.id,
+        entityId: candidates[0]!.id,
         ipAddress: meta.ipAddress,
         userAgent: meta.userAgent,
       });
       throw new UnauthorizedException({
         code: "AUTH_PIN_LOCKED",
-        message: `PIN bloqueado temporalmente. Intenta de nuevo despues de ${driver.pinLockedUntil.toISOString()}.`,
+        message: `PIN bloqueado temporalmente. Intenta de nuevo despues de ${soonest.toISOString()}.`,
       });
     }
 
-    const pinValid = await argon2.verify(driver.pinHash, pin).catch(() => false);
+    let driver: (typeof unlocked)[number] | undefined;
+    for (const candidate of unlocked) {
+      const isMatch = await argon2.verify(candidate.pinHash, pin).catch(() => false);
+      if (isMatch) {
+        driver = candidate;
+        break;
+      }
+    }
 
-    if (!pinValid) {
-      const failedAttempts = driver.pinFailedAttempts + 1;
-      const shouldLock = failedAttempts >= lockConfig.maxAttempts;
+    if (!driver) {
+      // Ninguna de las filas candidatas acepto el PIN: se cuenta como
+      // intento fallido en todas, para que el bloqueo por intentos no se
+      // pueda evadir teniendo el documento registrado en varios dispatchers.
+      await Promise.all(
+        unlocked.map(async (candidate) => {
+          const failedAttempts = candidate.pinFailedAttempts + 1;
+          const shouldLock = failedAttempts >= lockConfig.maxAttempts;
 
-      await this.prisma.driver.update({
-        where: { id: driver.id },
-        data: {
-          pinFailedAttempts: shouldLock ? 0 : failedAttempts,
-          pinLockedUntil: shouldLock ? new Date(Date.now() + lockConfig.lockMinutes * 60_000) : null,
-        },
-      });
+          await this.prisma.driver.update({
+            where: { id: candidate.id },
+            data: {
+              pinFailedAttempts: shouldLock ? 0 : failedAttempts,
+              pinLockedUntil: shouldLock ? new Date(Date.now() + lockConfig.lockMinutes * 60_000) : null,
+            },
+          });
 
-      await this.auditService.record({
-        tenantId: driver.tenantId,
-        action: shouldLock ? "AUTH_DRIVER_PIN_LOCKED" : "AUTH_LOGIN_FAILED",
-        entityType: "Driver",
-        entityId: driver.id,
-        ipAddress: meta.ipAddress,
-        userAgent: meta.userAgent,
-      });
+          await this.auditService.record({
+            tenantId: candidate.tenantId,
+            action: shouldLock ? "AUTH_DRIVER_PIN_LOCKED" : "AUTH_LOGIN_FAILED",
+            entityType: "Driver",
+            entityId: candidate.id,
+            ipAddress: meta.ipAddress,
+            userAgent: meta.userAgent,
+          });
+        }),
+      );
 
       throw new UnauthorizedException({ code: "AUTH_INVALID_CREDENTIALS", message: "Credenciales invalidas." });
     }
@@ -229,6 +259,7 @@ export class AuthService {
       });
     }
 
+    const dispatcherName = driver.dispatcher ? `${driver.dispatcher.firstName} ${driver.dispatcher.lastName}` : null;
     const permissions = TENANT_ROLE_DEFAULT_PERMISSIONS.DRIVER;
 
     const authenticatedUser: AuthenticatedUser = {
@@ -265,6 +296,7 @@ export class AuthService {
         lastName: driver.lastName,
         documentNumber: driver.documentNumber,
         permissions,
+        dispatcherName,
       },
     };
   }
@@ -415,7 +447,7 @@ export class AuthService {
 
     const driverSession = await this.prisma.driverRefreshToken.findFirst({
       where: { tokenHash, revokedAt: null },
-      include: { driver: true },
+      include: { driver: { include: { dispatcher: { select: { firstName: true, lastName: true } } } } },
     });
 
     if (driverSession) {
@@ -447,6 +479,9 @@ export class AuthService {
           lastName: driverSession.driver.lastName,
           documentNumber: driverSession.driver.documentNumber,
           permissions: TENANT_ROLE_DEFAULT_PERMISSIONS.DRIVER,
+          dispatcherName: driverSession.driver.dispatcher
+            ? `${driverSession.driver.dispatcher.firstName} ${driverSession.driver.dispatcher.lastName}`
+            : null,
         },
       };
     }

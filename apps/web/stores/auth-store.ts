@@ -17,6 +17,11 @@ export interface DriverSessionActor {
   lastName: string;
   documentNumber: string;
   permissions: string[];
+  // Despachador dueno de este registro (null si lo creo un TENANT_ADMIN) —
+  // el mismo documento puede estar registrado en varias cuentas de
+  // despachador a la vez, cada una con su propio PIN, asi que se muestra
+  // para dejar claro a que cuenta pertenece la sesion actual.
+  dispatcherName: string | null;
 }
 
 export type AuthStatus = "idle" | "loading" | "authenticated" | "unauthenticated";

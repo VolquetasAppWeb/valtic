@@ -432,6 +432,12 @@ model Driver {
   status             DriverStatus @default(ACTIVE)
   // Dispatcher "dueno" del conductor: null si lo creo un TENANT_ADMIN (dato
   // compartido/administrativo). Un DISPATCHER solo ve/gestiona los suyos.
+  // Mismo patron que Vehicle.dispatcherId: ademas de scopear visibilidad,
+  // tambien scopea unicidad de documentNumber (ver @@unique abajo) — dos
+  // DISPATCHER distintos pueden registrar el mismo conductor real (mismo
+  // numero de documento, cada uno con su propio PIN) cada uno en su propia
+  // cuenta, sin verse entre si. AuthService.driverLogin revisa todas las
+  // filas que compartan documento e identifica la correcta por PIN.
   dispatcherId       String?
   // Soft-delete: un DISPATCHER puede eliminar sus propios conductores, pero
   // la fila nunca se borra fisicamente — queda excluida de las consultas
@@ -458,7 +464,11 @@ model Driver {
   auditEvents    AuditEvent[] @relation("AuditActorDriver")
   documents      DriverDocument[]
 
-  @@unique([tenantId, documentNumber])
+  // Postgres no considera dos NULL iguales para efectos de un unique
+  // constraint, asi que esto por si solo NO evita documentos duplicados
+  // entre conductores creados por un TENANT_ADMIN (dispatcherId null) — ese
+  // caso sigue revalidandose a mano en DriversService.create.
+  @@unique([tenantId, dispatcherId, documentNumber])
   @@index([tenantId, status])
   @@index([tenantId, dispatcherId])
   @@index([tenantId, deletedAt])
@@ -579,6 +589,10 @@ model Vehicle {
 
   status       VehicleStatus @default(ACTIVE)
   // Mismo patron que Driver.dispatcherId: null si lo creo un TENANT_ADMIN.
+  // Ademas de scopear visibilidad (ver isDispatcherScoped en el service),
+  // ahora tambien scopea unicidad de placa/licencia (ver @@unique abajo):
+  // dos DISPATCHER distintos pueden registrar el mismo vehiculo real (misma
+  // placa) cada uno en su propia cuenta, sin verse entre si ni chocar.
   dispatcherId String?
   // Soft-delete: mismo patron que Driver — el DISPATCHER elimina solo sus
   // propios vehiculos, pero la fila nunca se borra fisicamente; queda
@@ -600,8 +614,14 @@ model Vehicle {
   incidents   Incident[]
   documents   VehicleDocument[]
 
-  @@unique([tenantId, plate])
-  @@unique([tenantId, licenseNumber])
+  // Postgres no considera dos NULL iguales para efectos de un unique
+  // constraint, asi que esto por si solo NO evita placas duplicadas entre
+  // vehiculos creados por un TENANT_ADMIN (dispatcherId null) — ese caso
+  // sigue revalidandose a mano en VehiclesService.create (ver
+  // existingActive/existingLicense), igual que ya se hacia antes de este
+  // campo, para no depender de una garantia que la base de datos no da.
+  @@unique([tenantId, dispatcherId, plate])
+  @@unique([tenantId, dispatcherId, licenseNumber])
   @@index([tenantId, status])
   @@index([tenantId, dispatcherId])
   @@index([tenantId, deletedAt])
