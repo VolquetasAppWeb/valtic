@@ -14,6 +14,10 @@ export interface AppConfig {
   driverPin: {
     maxAttempts: number;
     lockMinutes: number;
+    // Clave para poder mostrar el PIN de un conductor de nuevo (no solo al
+    // crearlo) — el PIN se guarda cifrado (ademas del hash de argon2 que se
+    // usa para el login) para poder descifrarlo bajo demanda.
+    encryptionKey: string;
   };
   adminLogin: {
     maxAttempts: number;
@@ -43,6 +47,13 @@ export interface AppConfig {
     smtpPass: string | undefined;
     fromAddress: string;
   };
+  gemini: {
+    // OCR de documentos (cedula, licencia, tarjeta de propiedad) via la API
+    // de Gemini en vez de tesseract.js local — sin key, el OCR de esos 4
+    // tipos de documento queda deshabilitado (null en todos los campos).
+    apiKey: string | undefined;
+    model: string;
+  };
 }
 
 export default (): AppConfig => ({
@@ -63,6 +74,9 @@ export default (): AppConfig => ({
   driverPin: {
     maxAttempts: parseInt(process.env.DRIVER_PIN_MAX_ATTEMPTS ?? "5", 10),
     lockMinutes: parseInt(process.env.DRIVER_PIN_LOCK_MINUTES ?? "15", 10),
+    // Solo para desarrollo local: en produccion hay que fijar una propia
+    // (32 bytes exactos, ej. `openssl rand -hex 32`), nunca reusar esta.
+    encryptionKey: process.env.DRIVER_PIN_ENCRYPTION_KEY ?? "dev_pin_encryption_key_32_bytes!",
   },
   adminLogin: {
     maxAttempts: parseInt(process.env.ADMIN_LOGIN_MAX_ATTEMPTS ?? "5", 10),
@@ -91,5 +105,9 @@ export default (): AppConfig => ({
     smtpUser: process.env.SMTP_USER,
     smtpPass: process.env.SMTP_PASS,
     fromAddress: process.env.MAIL_FROM ?? "VALTIC <no-reply@valtic.dev>",
+  },
+  gemini: {
+    apiKey: process.env.GEMINI_API_KEY,
+    model: process.env.GEMINI_MODEL ?? "gemini-3.6-flash",
   },
 });

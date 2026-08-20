@@ -76,7 +76,7 @@ export default function DriverLoginPage(): JSX.Element {
         <CardContent className="space-y-6">
           <div className="space-y-1.5">
             <label htmlFor="documentOrPhone" className="text-sm font-medium">
-              Documento o celular
+              Numero de documento
             </label>
             <input
               id="documentOrPhone"

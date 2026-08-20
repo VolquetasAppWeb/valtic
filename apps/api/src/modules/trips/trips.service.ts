@@ -19,7 +19,7 @@ export type DriverActionResult =
   | { status: "REQUIRES_REVIEW"; message: string };
 
 const DETAIL_INCLUDE = {
-  driver: { select: { id: true, firstName: true, lastName: true, documentNumber: true, phone: true } },
+  driver: { select: { id: true, firstName: true, lastName: true, documentNumber: true } },
   vehicle: { select: { id: true, plate: true, vehicleType: true, capacity: true, capacityUnit: true } },
   fleetOwner: { select: { id: true, name: true } },
   project: { select: { id: true, name: true, code: true } },

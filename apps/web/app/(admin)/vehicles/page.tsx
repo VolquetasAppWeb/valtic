@@ -2,24 +2,21 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Archive,
   Camera,
-  FileImage,
   Image as ImageIcon,
-  Pencil,
+  Info,
   Plus,
   Power,
   PowerOff,
+  RefreshCw,
   ScanLine,
   Trash2,
   Truck,
   UserCog,
 } from "lucide-react";
 import { PERMISSIONS } from "@valtic/types";
-import { vehicleSchema, type VehicleInput } from "@valtic/validation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -32,12 +29,10 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { apiClient, ApiError } from "@/lib/api-client";
-import { useAuthStore } from "@/stores/auth-store";
 import { usePermissions } from "@/hooks/use-permissions";
 import type {
   DeletedVehicle,
   Driver,
-  FleetOwner,
   PaginatedResult,
   Vehicle,
   VehicleDocument,
@@ -54,9 +49,68 @@ const VEHICLE_TYPE_LABEL: Record<string, string> = {
   OTHER: "Otro",
 };
 
+// Todos los campos que trae la tarjeta de propiedad, agrupados como en el
+// documento fisico (datos generales / cara frontal / cara posterior) — se
+// usa tanto en la confirmacion post-registro como en "Ver informacion".
+const CARD_FIELD_GROUPS: Array<{ title: string; fields: Array<{ key: keyof Vehicle; label: string }> }> = [
+  {
+    title: "Datos generales del documento",
+    fields: [
+      { key: "country", label: "Pais" },
+      { key: "licenseNumber", label: "N° licencia de transito" },
+      { key: "licenseBarcode", label: "Codigo de barras (LIC)" },
+    ],
+  },
+  {
+    title: "Informacion del vehiculo (cara frontal)",
+    fields: [
+      { key: "plate", label: "Placa" },
+      { key: "brand", label: "Marca" },
+      { key: "model", label: "Linea" },
+      { key: "year", label: "Modelo (año)" },
+      { key: "cc", label: "Cilindrada (CC)" },
+      { key: "color", label: "Color" },
+      { key: "serviceType", label: "Servicio" },
+      { key: "vehicleClass", label: "Clase de vehiculo" },
+      { key: "bodyType", label: "Tipo carroceria" },
+      { key: "fuelType", label: "Combustible" },
+      { key: "loadCapacity", label: "Capacidad (Kg/PSJ)" },
+      { key: "engineNumber", label: "N° motor" },
+      { key: "serialNumber", label: "N° serie" },
+      { key: "vin", label: "VIN" },
+      { key: "chassisNumber", label: "N° chasis" },
+      { key: "ownerName", label: "Propietario (nombre/razon social)" },
+      { key: "ownerDocumentNumber", label: "Identificacion propietario" },
+    ],
+  },
+  {
+    title: "Informacion complementaria y tramites (cara posterior)",
+    fields: [
+      { key: "mobilityRestriction", label: "Restriccion movilidad" },
+      { key: "armor", label: "Blindaje" },
+      { key: "horsepower", label: "Potencia (HP)" },
+      { key: "importDeclaration", label: "Declaracion de importacion" },
+      { key: "importDate", label: "Fecha de importacion" },
+      { key: "doors", label: "Puertas" },
+      { key: "propertyLimitation", label: "Limitacion a la propiedad" },
+      { key: "registrationDate", label: "Fecha de matricula" },
+      { key: "licenseIssueDate", label: "Fecha de expedicion Lic. Tto." },
+      { key: "licenseExpirationDate", label: "Fecha de vencimiento" },
+      { key: "transitAuthority", label: "Organismo de transito" },
+    ],
+  },
+];
+
+// Los campos de la tarjeta que se autocompletan solos con el registro
+// automatico (todo menos plate/vehicleType/brand/model/year/licenseNumber,
+// que ya tenian su propio manejo antes de agregar el resto de la tarjeta).
+const EXTRA_CARD_FIELD_KEYS = CARD_FIELD_GROUPS.flatMap((group) => group.fields.map((f) => f.key)).filter(
+  (key) => !["plate", "brand", "model", "year", "licenseNumber"].includes(key),
+) as Array<keyof VehicleRegistrationExtraction>;
+
 // Si el OCR leyo "ABC123" (sin guion) se lo agrega para que calce con el
-// formato exigido por el formulario (XXX-111); si no calza con ese patron
-// se deja tal cual para que el usuario la corrija a mano.
+// formato exigido por el backend (XXX-111); si no calza con ese patron se
+// deja tal cual (el registro automatico fallara y se le pedira reintentar).
 function formatPlateGuess(raw: string): string {
   const compact = raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
   const match = /^([A-Z]{3})(\d{3})$/.exec(compact);
@@ -65,22 +119,25 @@ function formatPlateGuess(raw: string): string {
 
 export default function VehiclesPage(): JSX.Element {
   const queryClient = useQueryClient();
-  const currentUser = useAuthStore((state) => state.user);
   const { has } = usePermissions();
-  const isDispatcher = !!currentUser?.roles.includes("DISPATCHER") && !currentUser?.roles.includes("TENANT_ADMIN");
   const canSeeDeletedLog = has([PERMISSIONS.AUDIT_READ, PERMISSIONS.AUDIT_READ_GLOBAL]);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editing, setEditing] = useState<Vehicle | null>(null);
-  const [formError, setFormError] = useState<string | null>(null);
+
+  // --- Registro automatico (solo fotos, sin campos manuales) ---
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createFrontFile, setCreateFrontFile] = useState<File | null>(null);
+  const [createBackFile, setCreateBackFile] = useState<File | null>(null);
+  const [createTruckFile, setCreateTruckFile] = useState<File | null>(null);
+  const [createPhase, setCreatePhase] = useState<"photos" | "error">("photos");
+  const [createErrorMessage, setCreateErrorMessage] = useState<string | null>(null);
+  const [confirmVehicle, setConfirmVehicle] = useState<Vehicle | null>(null);
+
   const [assignDialogVehicle, setAssignDialogVehicle] = useState<Vehicle | null>(null);
   const [selectedDriverId, setSelectedDriverId] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<Vehicle | null>(null);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletedLogOpen, setDeletedLogOpen] = useState(false);
-  const [registrationFile, setRegistrationFile] = useState<File | null>(null);
-  const [extractError, setExtractError] = useState<string | null>(null);
-  const [documentsVehicle, setDocumentsVehicle] = useState<Vehicle | null>(null);
+  const [infoVehicle, setInfoVehicle] = useState<Vehicle | null>(null);
 
   const [search, setSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
@@ -96,11 +153,6 @@ export default function VehiclesPage(): JSX.Element {
     refetchInterval: 15_000,
   });
 
-  const { data: ownersData } = useQuery({
-    queryKey: ["fleet-owners", "for-select"],
-    queryFn: () => apiClient.get<PaginatedResult<FleetOwner>>("/fleet-owners?pageSize=100"),
-  });
-
   const { data: driversData } = useQuery({
     queryKey: ["drivers", "for-select"],
     queryFn: () => apiClient.get<PaginatedResult<Driver>>("/drivers?pageSize=100"),
@@ -113,134 +165,90 @@ export default function VehiclesPage(): JSX.Element {
     enabled: deletedLogOpen && canSeeDeletedLog,
   });
 
-  const { data: documentsData, isLoading: loadingDocuments } = useQuery({
-    queryKey: ["vehicles", "documents", documentsVehicle?.id],
-    queryFn: () => apiClient.get<VehicleDocument[]>(`/vehicles/${documentsVehicle!.id}/documents`),
-    enabled: !!documentsVehicle,
+  const { data: infoDocuments, isLoading: loadingInfoDocuments } = useQuery({
+    queryKey: ["vehicles", "documents", infoVehicle?.id],
+    queryFn: () => apiClient.get<VehicleDocument[]>(`/vehicles/${infoVehicle!.id}/documents`),
+    enabled: !!infoVehicle,
   });
-
-  const {
-    register,
-    handleSubmit,
-    reset,
-    watch,
-    setValue,
-    formState: { errors },
-  } = useForm<VehicleInput>({ resolver: zodResolver(vehicleSchema) });
 
   function openCreate(): void {
-    setEditing(null);
-    setFormError(null);
-    setRegistrationFile(null);
-    setExtractError(null);
-    const owners = ownersData?.data ?? [];
-    const selfOwnerId = isDispatcher ? (owners.find((o) => o.userId === currentUser?.id)?.id ?? "") : "";
-    reset({
-      fleetOwnerId: selfOwnerId,
-      plate: "",
-      vehicleType: "DUMP_TRUCK",
-      brand: "",
-      model: "",
-      year: new Date().getFullYear(),
-      capacity: undefined,
-      capacityUnit: "TON",
-      licenseNumber: "",
-    });
-    setDialogOpen(true);
+    setCreateFrontFile(null);
+    setCreateBackFile(null);
+    setCreateTruckFile(null);
+    setCreatePhase("photos");
+    setCreateErrorMessage(null);
+    setCreateDialogOpen(true);
   }
 
-  function openEdit(vehicle: Vehicle): void {
-    setEditing(vehicle);
-    setFormError(null);
-    setRegistrationFile(null);
-    setExtractError(null);
-    reset({
-      fleetOwnerId: vehicle.fleetOwnerId,
-      plate: vehicle.plate,
-      vehicleType: vehicle.vehicleType,
-      brand: vehicle.brand ?? "",
-      model: vehicle.model ?? "",
-      year: vehicle.year,
-      capacity: vehicle.capacity ? Number(vehicle.capacity) : undefined,
-      capacityUnit: vehicle.capacityUnit ?? "TON",
-      licenseNumber: vehicle.licenseNumber ?? "",
-    });
-    setDialogOpen(true);
-  }
-
-  const extractMutation = useMutation({
-    mutationFn: (file: File) => {
-      const formData = new FormData();
-      formData.append("file", file);
-      return apiClient.post<VehicleRegistrationExtraction>("/vehicles/extract-registration", formData);
-    },
-    onSuccess: (extracted) => {
-      if (extracted.plate) setValue("plate", formatPlateGuess(extracted.plate));
-      if (extracted.brand) setValue("brand", extracted.brand);
-      if (extracted.line) setValue("model", extracted.line);
-      if (extracted.modelYear) setValue("year", Number(extracted.modelYear));
-      if (extracted.licenseNumber) setValue("licenseNumber", extracted.licenseNumber);
-      if (!extracted.plate && !extracted.brand && !extracted.line && !extracted.licenseNumber) {
-        setExtractError("No se pudo leer la foto automaticamente. Completa los datos a mano.");
-      } else {
-        setExtractError(null);
+  // Lee ambas fotos de la tarjeta de propiedad con OCR, crea el vehiculo con
+  // lo que se pudo leer, y sube las 3 fotos (frente/reverso obligatorias,
+  // volqueta opcional) al historico — todo en un solo intento sin pedirle
+  // nada mas al usuario. Si algo falla (no se pudo leer la placa, la placa
+  // ya existe, error de red, etc.) queda en el estado "error" con boton para
+  // reintentar el mismo proceso con las mismas fotos.
+  const registerMutation = useMutation({
+    mutationFn: async () => {
+      if (!createFrontFile || !createBackFile) {
+        throw new Error("Faltan fotos de la tarjeta de propiedad.");
       }
-    },
-    onError: () => setExtractError("No se pudo leer la foto automaticamente. Completa los datos a mano."),
-  });
 
-  function onRegistrationFileChange(file: File | null): void {
-    setRegistrationFile(file);
-    setExtractError(null);
-    if (file) {
-      extractMutation.mutate(file);
-    }
-  }
+      const extractForm = new FormData();
+      extractForm.append("front", createFrontFile);
+      extractForm.append("back", createBackFile);
+      const extracted = await apiClient.post<VehicleRegistrationExtraction>("/vehicles/extract-registration", extractForm);
 
-  const saveMutation = useMutation({
-    mutationFn: async (values: VehicleInput) => {
-      const payload = {
-        ...values,
-        fleetOwnerId: values.fleetOwnerId || undefined,
-        brand: values.brand || undefined,
-        model: values.model || undefined,
-        capacity: values.capacity || undefined,
-        capacityUnit: values.capacityUnit || undefined,
-        licenseNumber: values.licenseNumber || undefined,
-      };
-      const vehicle = editing
-        ? await apiClient.patch<Vehicle>(`/vehicles/${editing.id}`, payload)
-        : await apiClient.post<Vehicle>("/vehicles", payload);
+      const plate = extracted.plate ? formatPlateGuess(extracted.plate) : null;
+      if (!plate) {
+        throw new Error("NO_PLATE");
+      }
 
-      if (registrationFile) {
+      // Resto de campos de la tarjeta (color, VIN, propietario impreso, fechas,
+      // etc) — se mandan todos los que la IA haya podido leer, sin pedirselos
+      // al usuario.
+      const extraCardFields = Object.fromEntries(
+        EXTRA_CARD_FIELD_KEYS.map((key) => [key, extracted[key] || undefined]),
+      );
+
+      const vehicle = await apiClient.post<Vehicle>("/vehicles", {
+        plate,
+        vehicleType: "DUMP_TRUCK",
+        brand: extracted.brand || undefined,
+        model: extracted.line || undefined,
+        year: extracted.modelYear ? Number(extracted.modelYear) : new Date().getFullYear(),
+        licenseNumber: extracted.licenseNumber || undefined,
+        ...extraCardFields,
+      });
+
+      const uploadPhoto = (file: File, kind: string) => {
         const formData = new FormData();
-        formData.append("file", registrationFile);
-        await apiClient.post(`/vehicles/${vehicle.id}/documents`, formData);
-      }
+        formData.append("file", file);
+        formData.append("kind", kind);
+        return apiClient.post(`/vehicles/${vehicle.id}/documents`, formData);
+      };
+      await Promise.all([
+        uploadPhoto(createFrontFile, "REGISTRATION_FRONT"),
+        uploadPhoto(createBackFile, "REGISTRATION_BACK"),
+        ...(createTruckFile ? [uploadPhoto(createTruckFile, "VEHICLE_PHOTO")] : []),
+      ]);
 
       return vehicle;
     },
-    onSuccess: () => {
+    onSuccess: (vehicle) => {
       queryClient.invalidateQueries({ queryKey: ["vehicles"] });
-      setDialogOpen(false);
+      setCreateDialogOpen(false);
+      setConfirmVehicle(vehicle);
     },
     onError: (error: unknown) => {
-      setFormError(error instanceof ApiError ? error.response.message : "No se pudo guardar el vehiculo.");
+      setCreatePhase("error");
+      if (error instanceof Error && error.message === "NO_PLATE") {
+        setCreateErrorMessage(
+          "No se pudo leer la placa en las fotos. Verifica que la tarjeta se vea completa y con buena luz, y vuelve a intentar.",
+        );
+      } else {
+        setCreateErrorMessage(error instanceof ApiError ? error.response.message : "No se pudo registrar el vehiculo.");
+      }
     },
   });
-
-  function onSubmit(values: VehicleInput): void {
-    if (!isDispatcher && !values.fleetOwnerId) {
-      setFormError("Selecciona un propietario.");
-      return;
-    }
-    if (!editing && !registrationFile) {
-      setFormError("Sube la foto de la tarjeta de propiedad para registrar el vehiculo.");
-      return;
-    }
-    setFormError(null);
-    saveMutation.mutate(values);
-  }
 
   const statusMutation = useMutation({
     mutationFn: ({ id, status }: { id: string; status: "ACTIVE" | "MAINTENANCE" | "INACTIVE" }) =>
@@ -275,9 +283,16 @@ export default function VehiclesPage(): JSX.Element {
 
   const vehicles = data?.data ?? [];
   const deletedVehicles = deletedData?.data ?? [];
-  const owners = ownersData?.data ?? [];
   const drivers = driversData?.data ?? [];
-  const fleetOwnerId = watch("fleetOwnerId");
+
+  const canSubmitCreate = !!createFrontFile && !!createBackFile && !registerMutation.isPending;
+
+  const infoDocs = infoDocuments ?? [];
+  const infoFrontDoc = infoDocs.find((doc) => doc.kind === "REGISTRATION_FRONT");
+  const infoBackDoc = infoDocs.find((doc) => doc.kind === "REGISTRATION_BACK");
+  const infoTruckDoc = infoDocs.find((doc) => doc.kind === "VEHICLE_PHOTO");
+  const infoOtherDocs = infoDocs.filter((doc) => !["REGISTRATION_FRONT", "REGISTRATION_BACK", "VEHICLE_PHOTO"].includes(doc.kind));
+  const infoDriver = infoVehicle?.assignments?.find((a) => a.active)?.driver;
 
   return (
     <div className="space-y-6">
@@ -366,7 +381,9 @@ export default function VehiclesPage(): JSX.Element {
                       {[vehicle.brand, vehicle.model].filter(Boolean).join(" ") || "—"} ({vehicle.year})
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {vehicle.capacity ? `${vehicle.capacity} ${vehicle.capacityUnit === "TON" ? "ton" : "m3"}` : "—"}
+                      {vehicle.capacity
+                        ? `${vehicle.capacity} ${vehicle.capacityUnit === "TON" ? "ton" : "m3"}`
+                        : vehicle.loadCapacity || "—"}
                     </TableCell>
                     <TableCell className="text-muted-foreground">{vehicle.fleetOwner?.name}</TableCell>
                     <TableCell className="text-muted-foreground">
@@ -380,21 +397,18 @@ export default function VehiclesPage(): JSX.Element {
                         <Button
                           variant="ghost"
                           size="icon"
-                          aria-label="Asignar conductor"
-                          onClick={() => setAssignDialogVehicle(vehicle)}
+                          aria-label="Ver informacion"
+                          onClick={() => setInfoVehicle(vehicle)}
                         >
-                          <UserCog className="h-4 w-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => openEdit(vehicle)} aria-label="Editar">
-                          <Pencil className="h-4 w-4" />
+                          <Info className="h-4 w-4" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="icon"
-                          aria-label="Ver documentos"
-                          onClick={() => setDocumentsVehicle(vehicle)}
+                          aria-label="Asignar conductor"
+                          onClick={() => setAssignDialogVehicle(vehicle)}
                         >
-                          <FileImage className="h-4 w-4" />
+                          <UserCog className="h-4 w-4" />
                         </Button>
                         <Button
                           variant="ghost"
@@ -428,160 +442,142 @@ export default function VehiclesPage(): JSX.Element {
         )}
       </Card>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      {/* Registro automatico: solo pide fotos, el resto lo hace la IA. */}
+      <Dialog
+        open={createDialogOpen}
+        onOpenChange={(open) => {
+          if (!registerMutation.isPending) setCreateDialogOpen(open);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{editing ? "Editar vehiculo" : "Nuevo vehiculo"}</DialogTitle>
+            <DialogTitle>Nuevo vehiculo</DialogTitle>
           </DialogHeader>
-          <form className="space-y-4" onSubmit={handleSubmit(onSubmit)}>
-            {!editing && (
-              <div className="space-y-1.5 rounded-md border border-border bg-secondary/40 p-3">
-                <Label className="flex items-center gap-1.5">
-                  <ScanLine className="h-4 w-4" />
-                  Foto de la tarjeta de propiedad (obligatoria)
-                </Label>
-                <div className="flex gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="flex-1"
-                    onClick={() => document.getElementById("registration-photo-camera")?.click()}
-                  >
-                    <Camera className="h-4 w-4" />
-                    Tomar foto
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="flex-1"
-                    onClick={() => document.getElementById("registration-photo-gallery")?.click()}
-                  >
-                    <ImageIcon className="h-4 w-4" />
-                    Elegir de galeria
-                  </Button>
-                </div>
-                {/* Dos inputs separados: "capture" fuerza la camara en movil,
-                    sin "capture" el sistema ofrece la galeria/archivos. */}
-                <input
-                  id="registration-photo-camera"
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  onChange={(e) => onRegistrationFileChange(e.target.files?.[0] ?? null)}
-                  className="hidden"
-                />
-                <input
-                  id="registration-photo-gallery"
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) => onRegistrationFileChange(e.target.files?.[0] ?? null)}
-                  className="hidden"
-                />
-                {registrationFile && (
-                  <p className="text-xs text-muted-foreground">Foto seleccionada: {registrationFile.name}</p>
-                )}
-                <p className="text-xs text-muted-foreground">
-                  El sistema intenta leer placa, marca, linea, modelo y numero de licencia de transito para
-                  completar el formulario — revisa los datos antes de guardar.
-                </p>
-                {extractMutation.isPending && <p className="text-xs text-muted-foreground">Leyendo la foto...</p>}
-                {extractError && <p className="text-xs text-warning">{extractError}</p>}
-              </div>
-            )}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label>Propietario</Label>
-                <Select value={fleetOwnerId} onValueChange={(value) => setValue("fleetOwnerId", value)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecciona un propietario" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {owners.map((owner) => (
-                      <SelectItem key={owner.id} value={owner.id}>
-                        {owner.name}
-                        {owner.userId === currentUser?.id ? " (Tú)" : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {isDispatcher && (
-                  <p className="text-xs text-muted-foreground">
-                    Por defecto queda a tu nombre; solo cambialo si el vehiculo es de otro propietario.
-                  </p>
-                )}
-                {errors.fleetOwnerId && <p className="text-xs text-destructive">{errors.fleetOwnerId.message}</p>}
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="plate">Placa</Label>
-                <Input id="plate" placeholder="XXX-111" {...register("plate")} />
-                {errors.plate && <p className="text-xs text-destructive">{errors.plate.message}</p>}
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="licenseNumber">Numero de licencia de transito (opcional)</Label>
-              <Input id="licenseNumber" {...register("licenseNumber")} />
-              {errors.licenseNumber && <p className="text-xs text-destructive">{errors.licenseNumber.message}</p>}
-            </div>
-            <div className="space-y-1.5">
-              <Label>Tipo de vehiculo</Label>
-              <Select
-                value={watch("vehicleType")}
-                onValueChange={(value) => setValue("vehicleType", value as VehicleInput["vehicleType"])}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(VEHICLE_TYPE_LABEL).map(([value, label]) => (
-                    <SelectItem key={value} value={value}>
-                      {label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="brand">Marca (opcional)</Label>
-                <Input id="brand" {...register("brand")} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="model">Linea/Modelo (opcional)</Label>
-                <Input id="model" {...register("model")} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="year">Ano</Label>
-                <Input id="year" type="number" {...register("year")} />
-              </div>
-            </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="capacity">Capacidad (opcional)</Label>
-                <Input id="capacity" type="number" step="0.01" {...register("capacity")} />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Unidad</Label>
-                <Select
-                  value={watch("capacityUnit")}
-                  onValueChange={(value) => setValue("capacityUnit", value as VehicleInput["capacityUnit"])}
+
+          {createPhase === "error" ? (
+            <div className="space-y-4">
+              <p className="text-sm text-destructive">{createErrorMessage}</p>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => {
+                    setCreatePhase("photos");
+                    setCreateErrorMessage(null);
+                  }}
                 >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="TON">Toneladas</SelectItem>
-                    <SelectItem value="CUBIC_METER">Metros cubicos</SelectItem>
-                  </SelectContent>
-                </Select>
+                  Cambiar fotos
+                </Button>
+                <Button className="flex-1" onClick={() => registerMutation.mutate()} disabled={registerMutation.isPending}>
+                  <RefreshCw className="h-4 w-4" />
+                  Intentalo de nuevo
+                </Button>
               </div>
             </div>
-            {formError && <p className="text-sm text-destructive">{formError}</p>}
+          ) : (
+            <div className="space-y-4">
+              <PhotoPicker
+                icon={<ScanLine className="h-4 w-4" />}
+                label="Tarjeta de propiedad — frente (obligatoria)"
+                file={createFrontFile}
+                onChange={setCreateFrontFile}
+                idPrefix="registration-front"
+                disabled={registerMutation.isPending}
+              />
+              <PhotoPicker
+                icon={<ScanLine className="h-4 w-4" />}
+                label="Tarjeta de propiedad — reverso (obligatoria)"
+                file={createBackFile}
+                onChange={setCreateBackFile}
+                idPrefix="registration-back"
+                disabled={registerMutation.isPending}
+              />
+              <PhotoPicker
+                icon={<Truck className="h-4 w-4" />}
+                label="Foto de la volqueta (opcional)"
+                file={createTruckFile}
+                onChange={setCreateTruckFile}
+                idPrefix="truck-photo"
+                disabled={registerMutation.isPending}
+              />
+              <p className="text-xs text-muted-foreground">
+                El sistema lee la placa, marca, linea, modelo y numero de licencia de transito directamente de las
+                fotos y registra el vehiculo automaticamente.
+              </p>
+              <DialogFooter>
+                <Button className="w-full" disabled={!canSubmitCreate} onClick={() => registerMutation.mutate()}>
+                  {registerMutation.isPending ? "Leyendo y guardando..." : "Registrar vehiculo"}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirmacion: se muestra sola, de solo lectura, apenas se guarda. */}
+      <Dialog open={!!confirmVehicle} onOpenChange={(open) => !open && setConfirmVehicle(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Vehiculo registrado</DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[70vh] space-y-4 overflow-y-auto">
+            <p className="text-sm text-muted-foreground">Confirma que los datos leidos de la tarjeta de propiedad sean correctos.</p>
+            <InfoField label="Tipo" value={confirmVehicle ? VEHICLE_TYPE_LABEL[confirmVehicle.vehicleType] : undefined} />
+            {confirmVehicle && <VehicleCardDetails vehicle={confirmVehicle} />}
             <DialogFooter>
-              <Button type="submit" disabled={saveMutation.isPending}>
-                {saveMutation.isPending ? "Guardando..." : "Guardar"}
-              </Button>
+              <Button onClick={() => setConfirmVehicle(null)}>Listo</Button>
             </DialogFooter>
-          </form>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Ver informacion: datos completos + las fotos de la tarjeta y de la volqueta. */}
+      <Dialog open={!!infoVehicle} onOpenChange={(open) => !open && setInfoVehicle(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{infoVehicle?.plate}</DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[70vh] space-y-4 overflow-y-auto">
+            <div className="grid grid-cols-2 gap-3 rounded-md border border-border bg-secondary/40 p-4 text-sm">
+              <InfoField label="Tipo" value={infoVehicle ? VEHICLE_TYPE_LABEL[infoVehicle.vehicleType] : undefined} />
+              <InfoField label="Estado" value={infoVehicle?.status} />
+              <InfoField
+                label="Capacidad"
+                value={
+                  infoVehicle?.capacity
+                    ? `${infoVehicle.capacity} ${infoVehicle.capacityUnit === "TON" ? "ton" : "m3"}`
+                    : infoVehicle?.loadCapacity
+                }
+              />
+              <InfoField label="Propietario" value={infoVehicle?.fleetOwner?.name} />
+              <InfoField label="Conductor" value={infoDriver ? `${infoDriver.firstName} ${infoDriver.lastName}` : "Sin asignar"} />
+            </div>
+
+            {infoVehicle && <VehicleCardDetails vehicle={infoVehicle} />}
+
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">Fotos</p>
+              {loadingInfoDocuments ? (
+                <Skeleton className="h-24 w-full" />
+              ) : (
+                <div className="grid grid-cols-3 gap-2">
+                  <PhotoThumb label="Frente" doc={infoFrontDoc} />
+                  <PhotoThumb label="Reverso" doc={infoBackDoc} />
+                  <PhotoThumb label="Volqueta" doc={infoTruckDoc} />
+                </div>
+              )}
+              {infoOtherDocs.length > 0 && (
+                <div className="space-y-1.5 pt-2">
+                  <p className="text-xs text-muted-foreground">Otras fotos subidas</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {infoOtherDocs.map((doc) => (
+                      <PhotoThumb key={doc.id} label={new Date(doc.createdAt).toLocaleDateString("es-CO")} doc={doc} />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -656,48 +652,6 @@ export default function VehiclesPage(): JSX.Element {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!documentsVehicle} onOpenChange={(open) => !open && setDocumentsVehicle(null)}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Documentos de {documentsVehicle?.plate}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <p className="text-xs text-muted-foreground">
-              Historico de fotos de tarjeta de propiedad subidas para este vehiculo.
-            </p>
-            {loadingDocuments ? (
-              <Skeleton className="h-24 w-full" />
-            ) : !documentsData || documentsData.length === 0 ? (
-              <EmptyState
-                icon={FileImage}
-                title="Sin documentos"
-                description="Aun no se ha subido ninguna foto de tarjeta de propiedad."
-              />
-            ) : (
-              <div className="max-h-[60vh] space-y-2 overflow-y-auto">
-                {documentsData.map((doc) => (
-                  <a
-                    key={doc.id}
-                    href={`${API_ORIGIN}${doc.fileUrl}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-3 rounded-md border border-border p-2 hover:bg-secondary/40"
-                  >
-                    <img src={`${API_ORIGIN}${doc.fileUrl}`} alt={doc.fileName} className="h-14 w-14 rounded object-cover" />
-                    <div className="text-xs text-muted-foreground">
-                      <p>{new Date(doc.createdAt).toLocaleString("es-CO")}</p>
-                      <p>
-                        {doc.uploadedBy ? `${doc.uploadedBy.firstName} ${doc.uploadedBy.lastName}` : "—"}
-                      </p>
-                    </div>
-                  </a>
-                ))}
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
-
       <Dialog open={deletedLogOpen} onOpenChange={setDeletedLogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
@@ -747,6 +701,117 @@ export default function VehiclesPage(): JSX.Element {
           </div>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function InfoField({ label, value }: { label: string; value: string | null | undefined }): JSX.Element {
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="font-medium">{value || "—"}</p>
+    </div>
+  );
+}
+
+// Todos los campos de la tarjeta de propiedad, agrupados igual que en el
+// documento fisico (datos generales / cara frontal / cara posterior).
+function VehicleCardDetails({ vehicle }: { vehicle: Vehicle }): JSX.Element {
+  return (
+    <div className="space-y-4">
+      {CARD_FIELD_GROUPS.map((group) => (
+        <div key={group.title} className="space-y-2">
+          <p className="text-xs font-medium text-muted-foreground">{group.title}</p>
+          <div className="grid grid-cols-2 gap-3 rounded-md border border-border bg-secondary/40 p-3 text-sm">
+            {group.fields.map((field) => {
+              const value = vehicle[field.key];
+              return <InfoField key={field.key} label={field.label} value={value != null ? String(value) : null} />;
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PhotoThumb({ label, doc }: { label: string; doc: VehicleDocument | undefined }): JSX.Element {
+  if (!doc) {
+    return (
+      <div className="flex aspect-square flex-col items-center justify-center gap-1 rounded-md border border-dashed border-border text-center">
+        <p className="text-[10px] text-muted-foreground">{label}</p>
+        <p className="text-[10px] text-muted-foreground">Sin foto</p>
+      </div>
+    );
+  }
+  return (
+    <a href={`${API_ORIGIN}${doc.fileUrl}`} target="_blank" rel="noreferrer" className="space-y-1">
+      <img src={`${API_ORIGIN}${doc.fileUrl}`} alt={label} className="aspect-square w-full rounded-md border border-border object-cover" />
+      <p className="truncate text-center text-[10px] text-muted-foreground">{label}</p>
+    </a>
+  );
+}
+
+function PhotoPicker({
+  icon,
+  label,
+  file,
+  onChange,
+  idPrefix,
+  disabled,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  file: File | null;
+  onChange: (file: File | null) => void;
+  idPrefix: string;
+  disabled?: boolean;
+}): JSX.Element {
+  return (
+    <div className="space-y-1.5 rounded-md border border-border bg-secondary/40 p-3">
+      <Label className="flex items-center gap-1.5">
+        {icon}
+        {label}
+      </Label>
+      <div className="flex gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          className="flex-1"
+          disabled={disabled}
+          onClick={() => document.getElementById(`${idPrefix}-camera`)?.click()}
+        >
+          <Camera className="h-4 w-4" />
+          Tomar foto
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          className="flex-1"
+          disabled={disabled}
+          onClick={() => document.getElementById(`${idPrefix}-gallery`)?.click()}
+        >
+          <ImageIcon className="h-4 w-4" />
+          Elegir de galeria
+        </Button>
+      </div>
+      {/* Dos inputs separados: "capture" fuerza la camara en movil, sin
+          "capture" el sistema ofrece la galeria/archivos. */}
+      <input
+        id={`${idPrefix}-camera`}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={(e) => onChange(e.target.files?.[0] ?? null)}
+        className="hidden"
+      />
+      <input
+        id={`${idPrefix}-gallery`}
+        type="file"
+        accept="image/*"
+        onChange={(e) => onChange(e.target.files?.[0] ?? null)}
+        className="hidden"
+      />
+      {file && <p className="text-xs text-muted-foreground">Foto seleccionada: {file.name}</p>}
     </div>
   );
 }

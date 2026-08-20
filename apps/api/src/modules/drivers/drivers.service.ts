@@ -1,10 +1,17 @@
 import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import type { Prisma } from "@prisma/client";
 import * as argon2 from "argon2";
+import { randomInt } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
+import { OcrService, type CedulaExtraction, type DriverLicenseExtraction } from "../../common/ocr/ocr.service";
+import { StorageService } from "../../common/storage/storage.service";
+import { encryptPin, decryptPin } from "../../common/crypto/pin-cipher";
 import { toPaginatedResponse } from "../../common/pagination";
 import { isDispatcherScoped } from "../../common/dispatcher-scope";
 import { IN_PROGRESS_STATUSES } from "../trips/domain/trip-state-machine";
+import type { AppConfig } from "../../config/configuration";
 import type { AuthenticatedUser } from "../../common/types/authenticated-user";
 import type { PaginationQueryDto } from "../../common/dto/pagination-query.dto";
 import type { CreateDriverDto } from "./dto/create-driver.dto";
@@ -16,7 +23,64 @@ export class DriversService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    private readonly ocrService: OcrService,
+    private readonly storageService: StorageService,
+    private readonly configService: ConfigService<AppConfig, true>,
   ) {}
+
+  // Lee las fotos de la cedula (frente y reverso) y devuelve todos los
+  // campos que se pudieron leer — no persiste nada, el registro automatico
+  // usa esto para autocompletar y crear el conductor.
+  async extractCedula(files: Express.Multer.File[]): Promise<CedulaExtraction> {
+    const { extraction } = await this.ocrService.extractCedulaFromImages(files.map((f) => f.buffer));
+    return extraction;
+  }
+
+  // Lee las fotos de la licencia de conduccion (frente y reverso) y
+  // devuelve todos los campos que se pudieron leer, incluido el nombre y
+  // numero de documento del frente (para comparar contra la cedula).
+  async extractLicense(files: Express.Multer.File[]): Promise<DriverLicenseExtraction> {
+    const { extraction } = await this.ocrService.extractDriverLicenseFromImages(files.map((f) => f.buffer));
+    return extraction;
+  }
+
+  // Guarda una foto en el historico del conductor (nunca sobreescribe: cada
+  // carga queda como una fila nueva). `kind` distingue frente/reverso de
+  // cedula y licencia de subidas sueltas (OTHER, el default).
+  async uploadDocument(
+    tenantId: string,
+    driverId: string,
+    file: Express.Multer.File,
+    actor: AuthenticatedUser,
+    kind?: "CEDULA_FRONT" | "CEDULA_BACK" | "LICENSE_FRONT" | "LICENSE_BACK" | "OTHER",
+  ) {
+    await this.assertExists(tenantId, driverId, actor);
+
+    const stored = await this.storageService.save(file, `drivers/${driverId}/documents`);
+
+    return this.prisma.driverDocument.create({
+      data: {
+        tenantId,
+        driverId,
+        fileUrl: stored.fileUrl,
+        fileName: stored.fileName,
+        mimeType: stored.mimeType,
+        fileSize: stored.fileSize,
+        uploadedById: actor.kind === "user" ? actor.sub : null,
+        ...(kind ? { kind } : {}),
+      },
+    });
+  }
+
+  async listDocuments(tenantId: string, driverId: string, actor: AuthenticatedUser) {
+    await this.assertExists(tenantId, driverId, actor);
+
+    return this.prisma.driverDocument.findMany({
+      where: { tenantId, driverId },
+      orderBy: { createdAt: "desc" },
+      include: { uploadedBy: { select: { id: true, firstName: true, lastName: true } } },
+    });
+  }
 
   async create(tenantId: string, dto: CreateDriverDto, actor: AuthenticatedUser) {
     const existingActive = await this.prisma.driver.findFirst({
@@ -33,12 +97,20 @@ export class DriversService {
       where: { tenantId, documentNumber: dto.documentNumber, deletedAt: { not: null } },
     });
 
-    const { pin, licenseExpiration, ...rest } = dto;
+    const { licenseExpiration, licenseCategories, ...rest } = dto;
+    // El PIN se genera aleatorio aca mismo. Se devuelve en texto plano en la
+    // respuesta de creacion, y ademas se guarda cifrado (pinEncrypted, AES-256-GCM)
+    // para poder consultarlo de nuevo despues via getPin() — a diferencia del
+    // hash de argon2 (pinHash), que solo sirve para validar el login.
+    const pin = this.generatePin();
     const pinHash = await argon2.hash(pin);
+    const pinEncrypted = encryptPin(pin, this.configService.get("driverPin", { infer: true }).encryptionKey);
     const data = {
       ...rest,
       licenseExpiration: new Date(licenseExpiration),
+      licenseCategories: licenseCategories as unknown as Prisma.InputJsonValue | undefined,
       pinHash,
+      pinEncrypted,
       dispatcherId: isDispatcherScoped(actor) ? actor.sub : null,
       status: "ACTIVE" as const,
       deletedAt: null,
@@ -61,7 +133,11 @@ export class DriversService {
       newValue: { documentNumber: driver.documentNumber, firstName: driver.firstName, lastName: driver.lastName },
     });
 
-    return this.toSafeDriver(driver);
+    return { ...this.toSafeDriver(driver), pin };
+  }
+
+  private generatePin(): string {
+    return String(randomInt(0, 1_000_000)).padStart(6, "0");
   }
 
   async findAll(tenantId: string, query: DriverQueryDto, actor: AuthenticatedUser) {
@@ -119,10 +195,14 @@ export class DriversService {
   async update(tenantId: string, id: string, dto: UpdateDriverDto, actor: AuthenticatedUser) {
     await this.assertExists(tenantId, id, actor);
 
-    const { licenseExpiration, ...rest } = dto;
+    const { licenseExpiration, licenseCategories, ...rest } = dto;
     const driver = await this.prisma.driver.update({
       where: { id },
-      data: { ...rest, ...(licenseExpiration ? { licenseExpiration: new Date(licenseExpiration) } : {}) },
+      data: {
+        ...rest,
+        ...(licenseExpiration ? { licenseExpiration: new Date(licenseExpiration) } : {}),
+        ...(licenseCategories ? { licenseCategories: licenseCategories as unknown as Prisma.InputJsonValue } : {}),
+      },
     });
 
     await this.auditService.record({
@@ -157,10 +237,11 @@ export class DriversService {
   async resetPin(tenantId: string, id: string, newPin: string, actor: AuthenticatedUser) {
     await this.assertExists(tenantId, id, actor);
     const pinHash = await argon2.hash(newPin);
+    const pinEncrypted = encryptPin(newPin, this.configService.get("driverPin", { infer: true }).encryptionKey);
 
     const updated = await this.prisma.driver.update({
       where: { id },
-      data: { pinHash, pinFailedAttempts: 0, pinLockedUntil: null },
+      data: { pinHash, pinEncrypted, pinFailedAttempts: 0, pinLockedUntil: null },
     });
 
     await this.auditService.record({
@@ -172,6 +253,31 @@ export class DriversService {
     });
 
     return this.toSafeDriver(updated);
+  }
+
+  // Descifra y devuelve el PIN actual del conductor para que el despachador
+  // pueda volver a consultarlo (no solo verlo una vez al crearlo). Los
+  // conductores creados antes de este campo no tienen pinEncrypted — en ese
+  // caso hay que usar "Restablecer PIN" para generarles uno nuevo.
+  async getPin(tenantId: string, id: string, actor: AuthenticatedUser) {
+    const driver = await this.assertExists(tenantId, id, actor);
+    if (!driver.pinEncrypted) {
+      throw new ConflictException({
+        code: "DRIVER_PIN_NOT_AVAILABLE",
+        message: "Este conductor no tiene un PIN consultable. Usa 'Restablecer PIN' para generarle uno nuevo.",
+      });
+    }
+    const pin = decryptPin(driver.pinEncrypted, this.configService.get("driverPin", { infer: true }).encryptionKey);
+
+    await this.auditService.record({
+      tenantId,
+      actorUserId: actor.sub,
+      action: "DRIVER_PIN_VIEWED",
+      entityType: "Driver",
+      entityId: id,
+    });
+
+    return { pin };
   }
 
   // El DISPATCHER elimina (soft-delete) solo sus propios conductores; nunca
@@ -207,7 +313,6 @@ export class DriversService {
         documentNumber: driver.documentNumber,
         firstName: driver.firstName,
         lastName: driver.lastName,
-        phone: driver.phone,
         licenseNumber: driver.licenseNumber,
         status: driver.status,
       },
@@ -252,8 +357,8 @@ export class DriversService {
     return driver;
   }
 
-  private toSafeDriver<T extends { pinHash: string }>(driver: T) {
-    const { pinHash: _pinHash, ...safe } = driver;
+  private toSafeDriver<T extends { pinHash: string; pinEncrypted?: string | null }>(driver: T) {
+    const { pinHash: _pinHash, pinEncrypted: _pinEncrypted, ...safe } = driver;
     return safe;
   }
 }

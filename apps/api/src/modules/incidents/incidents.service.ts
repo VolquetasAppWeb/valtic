@@ -12,7 +12,7 @@ import type { ResolveIncidentDto } from "./dto/resolve-incident.dto";
 import type { IncidentQueryDto } from "./dto/incident-query.dto";
 
 const DETAIL_INCLUDE = {
-  driver: { select: { id: true, firstName: true, lastName: true, documentNumber: true, phone: true } },
+  driver: { select: { id: true, firstName: true, lastName: true, documentNumber: true } },
   vehicle: { select: { id: true, plate: true } },
   trip: { select: { id: true, sequentialNumber: true, status: true } },
   resolvedBy: { select: { id: true, firstName: true, lastName: true } },

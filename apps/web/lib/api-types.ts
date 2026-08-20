@@ -30,18 +30,102 @@ export interface DriverVehicleAssignmentRef {
   driver?: { id: string; firstName: string; lastName: string };
 }
 
-export interface Driver {
+// Resto de campos de cedula/licencia — todos texto libre y opcionales,
+// vienen de OCR best-effort. Compartido entre Driver y CedulaExtraction.
+export interface DriverCardFields {
+  country: string | null;
+  nationality: string | null;
+  height: string | null;
+  sex: string | null;
+  birthDate: string | null;
+  bloodType: string | null;
+  birthPlace: string | null;
+  issuePlace: string | null;
+  documentExpirationDate: string | null;
+  supportNumber: string | null;
+  mrz: string | null;
+  licenseIssuingAuthority: string | null;
+  licenseRestrictions: string | null;
+  licenseIssueDate: string | null;
+}
+
+// Una fila de la tabla "CATEGORIAS AUTORIZADAS" de la licencia — cada
+// categoria tiene su propia clase de vehiculo, vigencia y servicio.
+export interface DriverLicenseCategoryEntry {
+  category: string | null;
+  vehicleClass: string | null;
+  expiration: string | null;
+  serviceType: string | null;
+}
+
+export interface Driver extends DriverCardFields {
   id: string;
   documentType: "CC" | "CE" | "PASSPORT" | "NIT";
   documentNumber: string;
   firstName: string;
   lastName: string;
-  phone: string;
   licenseNumber: string;
+  licenseCategory: string | null;
   licenseExpiration: string;
+  licenseCategories: DriverLicenseCategoryEntry[] | null;
   status: "ACTIVE" | "INACTIVE" | "SUSPENDED";
   lastLoginAt: string | null;
   assignments?: DriverVehicleAssignmentRef[];
+}
+
+// Solo la respuesta de POST /drivers trae el PIN en texto plano — es una
+// revelacion unica, no se puede volver a consultar despues.
+export interface CreatedDriver extends Driver {
+  pin: string;
+}
+
+export interface CedulaExtraction {
+  documentType: string | null;
+  country: string | null;
+  documentNumber: string | null;
+  lastName: string | null;
+  firstName: string | null;
+  nationality: string | null;
+  height: string | null;
+  sex: string | null;
+  birthDate: string | null;
+  bloodType: string | null;
+  birthPlace: string | null;
+  issuePlace: string | null;
+  documentExpirationDate: string | null;
+  supportNumber: string | null;
+  mrz: string | null;
+}
+
+// "documentNumber" y "fullName" (frente) se usan para comparar contra la
+// cedula y avisar si no coinciden — no autocompletan el formulario.
+export interface DriverLicenseExtraction {
+  country: string | null;
+  documentType: string | null;
+  licenseNumber: string | null;
+  licenseBarcode: string | null;
+  fullName: string | null;
+  documentNumber: string | null;
+  birthDate: string | null;
+  issueDate: string | null;
+  bloodType: string | null;
+  restrictions: string | null;
+  issuingAuthority: string | null;
+  categories: DriverLicenseCategoryEntry[];
+}
+
+export type DriverDocumentKind = "CEDULA_FRONT" | "CEDULA_BACK" | "LICENSE_FRONT" | "LICENSE_BACK" | "OTHER";
+
+export interface DriverDocument {
+  id: string;
+  driverId: string;
+  fileUrl: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  kind: DriverDocumentKind;
+  createdAt: string;
+  uploadedBy: { id: string; firstName: string; lastName: string } | null;
 }
 
 export interface DeletedDriver extends Driver {
@@ -51,7 +135,39 @@ export interface DeletedDriver extends Driver {
   deletedBy: { id: string; firstName: string; lastName: string } | null;
 }
 
-export interface Vehicle {
+// Resto de campos de la tarjeta de propiedad (frente y reverso), aparte de
+// plate/brand/model(linea)/year/licenseNumber que ya existian. Todos texto
+// libre y opcionales — vienen de OCR best-effort.
+export interface VehicleRegistrationCardFields {
+  country: string | null;
+  licenseBarcode: string | null;
+  cc: string | null;
+  color: string | null;
+  serviceType: string | null;
+  vehicleClass: string | null;
+  bodyType: string | null;
+  fuelType: string | null;
+  loadCapacity: string | null;
+  engineNumber: string | null;
+  serialNumber: string | null;
+  vin: string | null;
+  chassisNumber: string | null;
+  ownerName: string | null;
+  ownerDocumentNumber: string | null;
+  mobilityRestriction: string | null;
+  armor: string | null;
+  horsepower: string | null;
+  importDeclaration: string | null;
+  importDate: string | null;
+  doors: string | null;
+  propertyLimitation: string | null;
+  registrationDate: string | null;
+  licenseIssueDate: string | null;
+  licenseExpirationDate: string | null;
+  transitAuthority: string | null;
+}
+
+export interface Vehicle extends VehicleRegistrationCardFields {
   id: string;
   fleetOwnerId: string;
   plate: string;
@@ -67,6 +183,8 @@ export interface Vehicle {
   assignments?: DriverVehicleAssignmentRef[];
 }
 
+export type VehicleDocumentKind = "REGISTRATION_FRONT" | "REGISTRATION_BACK" | "VEHICLE_PHOTO" | "OTHER";
+
 export interface VehicleDocument {
   id: string;
   vehicleId: string;
@@ -74,11 +192,12 @@ export interface VehicleDocument {
   fileName: string;
   mimeType: string;
   fileSize: number;
+  kind: VehicleDocumentKind;
   createdAt: string;
   uploadedBy: { id: string; firstName: string; lastName: string } | null;
 }
 
-export interface VehicleRegistrationExtraction {
+export interface VehicleRegistrationExtraction extends VehicleRegistrationCardFields {
   plate: string | null;
   brand: string | null;
   line: string | null;
@@ -196,7 +315,7 @@ export interface Trip {
   voucherLongitude: number | null;
   voucherUploadedAt: string | null;
   createdAt: string;
-  driver: { id: string; firstName: string; lastName: string; documentNumber: string; phone: string };
+  driver: { id: string; firstName: string; lastName: string; documentNumber: string };
   vehicle: { id: string; plate: string; vehicleType: string; capacity: string | null; capacityUnit: string | null };
   fleetOwner: { id: string; name: string };
   project: { id: string; name: string; code: string };
@@ -240,7 +359,7 @@ export interface Incident {
   reportedAt: string;
   resolvedAt: string | null;
   resolutionNotes: string | null;
-  driver: { id: string; firstName: string; lastName: string; documentNumber: string; phone: string };
+  driver: { id: string; firstName: string; lastName: string; documentNumber: string };
   vehicle: { id: string; plate: string } | null;
   trip: { id: string; sequentialNumber: number; status: string } | null;
   resolvedBy: { id: string; firstName: string; lastName: string } | null;

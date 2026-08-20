@@ -19,22 +19,24 @@ export const fleetOwnerSchema = z.object({
 });
 export type FleetOwnerInput = z.infer<typeof fleetOwnerSchema>;
 
+// El PIN ya no se pide aca: el backend lo genera solo al crear el
+// conductor (ver DriversService.create) y lo devuelve una unica vez en la
+// respuesta para que el despachador se lo comparta.
 export const driverSchema = z.object({
   documentType: z.enum(["CC", "CE", "PASSPORT", "NIT"]),
   documentNumber: z.string().min(4, "Documento invalido"),
   firstName: z.string().min(2, "Minimo 2 caracteres"),
   lastName: z.string().min(2, "Minimo 2 caracteres"),
-  phone: z.string().min(7, "Telefono invalido"),
+  // Opcional: no aparece en cedula ni licencia, el registro automatico con
+  // IA no lo pide — se completa despues editando al conductor.
+  phone: z.string().min(7, "Telefono invalido").optional().or(z.literal("")),
   licenseNumber: z.string().min(2, "Requerido"),
+  licenseCategory: z.string().optional().or(z.literal("")),
   licenseExpiration: z.string().min(1, "Requerido"),
-  pin: z
-    .string()
-    .length(6, "El PIN debe tener 6 digitos")
-    .regex(/^\d{6}$/, "Solo numeros"),
 });
 export type DriverInput = z.infer<typeof driverSchema>;
 
-export const driverUpdateSchema = driverSchema.omit({ pin: true });
+export const driverUpdateSchema = driverSchema;
 export type DriverUpdateInput = z.infer<typeof driverUpdateSchema>;
 
 export const vehicleSchema = z.object({

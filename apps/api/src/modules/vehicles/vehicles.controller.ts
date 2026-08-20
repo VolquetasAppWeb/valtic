@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, UploadedFile, UseGuards, UseInterceptors } from "@nestjs/common";
-import { FileInterceptor } from "@nestjs/platform-express";
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, UploadedFile, UploadedFiles, UseGuards, UseInterceptors } from "@nestjs/common";
+import { FileFieldsInterceptor, FileInterceptor } from "@nestjs/platform-express";
 import { memoryStorage } from "multer";
 import { ApiBearerAuth, ApiConsumes, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { PERMISSIONS } from "@valtic/types";
@@ -13,8 +13,11 @@ import { VehiclesService } from "./vehicles.service";
 import { CreateVehicleDto } from "./dto/create-vehicle.dto";
 import { UpdateVehicleDto } from "./dto/update-vehicle.dto";
 import { UpdateVehicleStatusDto } from "./dto/update-vehicle-status.dto";
+import { UploadVehicleDocumentDto } from "./dto/upload-vehicle-document.dto";
 import { VehicleQueryDto } from "./dto/vehicle-query.dto";
 import { DeleteVehicleDto } from "./dto/delete-vehicle.dto";
+
+const DOCUMENT_FILE_LIMITS = { fileSize: 10 * 1024 * 1024 };
 
 @ApiTags("vehicles")
 @ApiBearerAuth()
@@ -34,13 +37,28 @@ export class VehiclesController {
   @Post("extract-registration")
   @Permissions(PERMISSIONS.VEHICLES_MANAGE)
   @ApiConsumes("multipart/form-data")
-  @UseInterceptors(FileInterceptor("file", { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
+  @UseInterceptors(
+    FileFieldsInterceptor(
+      [
+        { name: "front", maxCount: 1 },
+        { name: "back", maxCount: 1 },
+      ],
+      { storage: memoryStorage(), limits: DOCUMENT_FILE_LIMITS },
+    ),
+  )
   @ApiOperation({
     summary:
-      "Lee una foto de tarjeta de propiedad por OCR y devuelve placa/marca/linea/modelo/licencia de transito para autocompletar el formulario (no guarda nada)",
+      "Lee las fotos de tarjeta de propiedad (frente obligatorio, reverso opcional) por OCR y devuelve placa/marca/linea/modelo/licencia de transito (no guarda nada)",
   })
-  extractRegistration(@UploadedFile() file: Express.Multer.File) {
-    return this.vehiclesService.extractRegistration(file);
+  extractRegistration(
+    @UploadedFiles() files: { front?: Express.Multer.File[]; back?: Express.Multer.File[] },
+  ) {
+    const front = files.front?.[0];
+    if (!front) {
+      throw new BadRequestException({ code: "REGISTRATION_FRONT_REQUIRED", message: "Falta la foto del frente de la tarjeta de propiedad." });
+    }
+    const back = files.back?.[0];
+    return this.vehiclesService.extractRegistration(back ? [front, back] : [front]);
   }
 
   @Get()
@@ -70,15 +88,16 @@ export class VehiclesController {
   @Post(":id/documents")
   @Permissions(PERMISSIONS.VEHICLES_MANAGE)
   @ApiConsumes("multipart/form-data")
-  @UseInterceptors(FileInterceptor("file", { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
-  @ApiOperation({ summary: "Sube una foto de tarjeta de propiedad al historico del vehiculo (nunca sobreescribe una anterior)" })
+  @UseInterceptors(FileInterceptor("file", { storage: memoryStorage(), limits: DOCUMENT_FILE_LIMITS }))
+  @ApiOperation({ summary: "Sube una foto al historico del vehiculo (nunca sobreescribe una anterior)" })
   uploadDocument(
     @Param("id") id: string,
     @UploadedFile() file: Express.Multer.File,
+    @Body() dto: UploadVehicleDocumentDto,
     @TenantId() tenantId: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.vehiclesService.uploadDocument(tenantId, id, file, user);
+    return this.vehiclesService.uploadDocument(tenantId, id, file, user, dto.kind);
   }
 
   @Get(":id/documents")

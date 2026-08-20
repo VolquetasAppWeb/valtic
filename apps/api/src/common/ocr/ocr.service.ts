@@ -1,6 +1,8 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { createWorker } from "tesseract.js";
-import { Jimp, JimpMime } from "jimp";
+import { GoogleGenAI, Type } from "@google/genai";
+import type { AppConfig } from "../../config/configuration";
 
 export interface VoucherExtraction {
   quantity: number | null;
@@ -12,12 +14,99 @@ export interface VoucherExtraction {
   fields: Record<string, string>;
 }
 
+// Todos los campos que trae una tarjeta de propiedad colombiana (frente y
+// reverso). Todos nullable: es best-effort, lo que no se logre leer con
+// certeza queda en null para que el usuario lo revise/complete despues.
 export interface VehicleRegistrationExtraction {
+  // Datos generales del documento
+  country: string | null;
+  licenseNumber: string | null; // Numero de licencia de transito
+  licenseBarcode: string | null; // Codigo de barras inferior (LIC)
+
+  // Cara frontal
   plate: string | null;
   brand: string | null;
   line: string | null;
   modelYear: string | null;
-  licenseNumber: string | null;
+  cc: string | null; // Cilindrada
+  color: string | null;
+  serviceType: string | null; // Servicio
+  vehicleClass: string | null; // Clase de vehiculo
+  bodyType: string | null; // Tipo carroceria
+  fuelType: string | null; // Combustible
+  loadCapacity: string | null; // Capacidad (Kg/PSJ)
+  engineNumber: string | null;
+  serialNumber: string | null;
+  vin: string | null;
+  chassisNumber: string | null;
+  ownerName: string | null; // Nombre/razon social del propietario
+  ownerDocumentNumber: string | null; // Identificacion del propietario
+
+  // Cara posterior
+  mobilityRestriction: string | null;
+  armor: string | null; // Blindaje
+  horsepower: string | null; // Potencia (HP)
+  importDeclaration: string | null;
+  importDate: string | null;
+  doors: string | null;
+  propertyLimitation: string | null;
+  registrationDate: string | null; // Fecha de matricula
+  licenseIssueDate: string | null; // Fecha de expedicion Lic. Tto.
+  licenseExpirationDate: string | null; // Fecha de vencimiento
+  transitAuthority: string | null; // Organismo de transito
+}
+
+// Todos los campos que trae una cedula de ciudadania colombiana (frente y
+// reverso). Todos nullable: best-effort, lo que no se logre leer con
+// certeza queda en null. No incluye elementos puramente graficos que un
+// modelo de lenguaje no puede "leer" como texto (firma, huella, codigo QR
+// como imagen) — solo lo que efectivamente es texto/numeros en el documento.
+export interface CedulaExtraction {
+  documentType: string | null; // Tipo de documento, ej. "CC"
+  country: string | null;
+  documentNumber: string | null; // NUIP
+  lastName: string | null;
+  firstName: string | null;
+  nationality: string | null;
+  height: string | null; // Estatura
+  sex: string | null;
+  birthDate: string | null; // Formato ISO YYYY-MM-DD si es claro
+  bloodType: string | null; // G.S. / RH
+  birthPlace: string | null;
+  issuePlace: string | null; // Fecha y lugar de expedicion, tal como aparece
+  documentExpirationDate: string | null; // Formato ISO YYYY-MM-DD si es claro
+  supportNumber: string | null; // Numero de soporte/serie (reverso)
+  mrz: string | null; // Codigo de lectura mecanica (reverso), si trae
+}
+
+// Una fila de la tabla "CATEGORIAS AUTORIZADAS" del reverso — cada categoria
+// tiene su PROPIA vigencia y servicio (una licencia tipica trae una fila
+// "B2 ... PARTICULAR" y otra "C2 ... PUBLICO" con vigencias distintas), asi
+// que no se pueden aplanar en un solo campo sin perder esa informacion.
+export interface DriverLicenseCategoryEntry {
+  category: string | null; // ej. "C2"
+  vehicleClass: string | null; // Clase de vehiculo de esa fila
+  expiration: string | null; // Vigencia de esa fila, formato ISO YYYY-MM-DD si es clara
+  serviceType: string | null; // Servicio de esa fila (PARTICULAR/PUBLICO)
+}
+
+// Todos los campos que trae una licencia de conduccion colombiana (frente y
+// reverso). "documentNumber" es el numero de documento/cedula reimpreso en
+// el frente de la licencia (NO el numero de LC) — se usa junto con
+// "fullName" para comparar contra la cedula y avisar si no coinciden.
+export interface DriverLicenseExtraction {
+  country: string | null;
+  documentType: string | null; // Tipo de documento, ej. "Licencia de conduccion"
+  licenseNumber: string | null; // Numero de LC (bajo el codigo de barras, reverso)
+  licenseBarcode: string | null; // Codigo de barras/identificador inferior, si es distinto del numero de LC
+  fullName: string | null; // Nombre completo (frente)
+  documentNumber: string | null; // Numero de documento/cedula impreso como "No." en el frente
+  birthDate: string | null;
+  issueDate: string | null; // Fecha de expedicion (frente)
+  bloodType: string | null; // Sangre/RH (frente)
+  restrictions: string | null; // Restricciones del conductor (frente)
+  issuingAuthority: string | null; // Organismo de transito expedidor (frente)
+  categories: DriverLicenseCategoryEntry[]; // Una fila por cada categoria autorizada (reverso)
 }
 
 // Etiquetas conocidas de los vales tipo "recibo de entrega de material"
@@ -40,30 +129,26 @@ const KNOWN_LABELS: Record<string, string> = {
 // modelo de idioma) sin lanzar una excepcion que el try/catch pueda atrapar
 // — por eso el limite de tiempo es imprescindible, no solo una optimizacion.
 const OCR_TIMEOUT_MS = 20_000;
-// La tarjeta de propiedad se intenta en varias rotaciones (ver mas abajo),
-// asi que necesita mas presupuesto de tiempo total que un OCR de una sola
-// pasada.
-const REGISTRATION_OCR_TIMEOUT_MS = 60_000;
-// Fotos de camara vienen en resoluciones muy altas (varios miles de px de
-// ancho); reducirlas antes del OCR baja mucho el tiempo de reconocimiento
-// y el uso de memoria sin perder legibilidad del texto.
-const MAX_OCR_IMAGE_WIDTH = 1600;
-// Si la foto viene chica (ej. una captura ya comprimida, no la original de
-// camara), agrandarla ayuda a Tesseract a segmentar mejor los caracteres —
-// sin esto, en fotos de baja resolucion se pierden justo las etiquetas mas
-// pequenas de la tarjeta (PLACA, MARCA, etc.) aunque los valores en negrita
-// se sigan leyendo bien.
-const MIN_OCR_IMAGE_WIDTH = 1200;
-// Angulos a probar, en orden de probabilidad: la mayoria de fotos ya vienen
-// derechas o giradas 90° en un sentido u otro; 180° (foto al reves) es el
-// caso menos comun.
-const ROTATIONS_TO_TRY = [0, 90, 270, 180] as const;
-// Cuantos de los 5 campos hay que leer para dejar de probar rotaciones.
-const GOOD_ENOUGH_SCORE = 4;
+// La API de Gemini puede demorar bastante mas de lo esperado en algunos
+// llamados (picos de latencia, fotos grandes) — 60s da margen de sobra sin
+// que el usuario espere demasiado; no hay reintentos ni multiples variantes
+// como tenia la version con tesseract.js, asi que solo hay una oportunidad.
+const GEMINI_TIMEOUT_MS = 60_000;
 
 @Injectable()
 export class OcrService {
   private readonly logger = new Logger(OcrService.name);
+  private readonly gemini: GoogleGenAI | null;
+  private readonly geminiModel: string;
+
+  constructor(private readonly configService: ConfigService<AppConfig, true>) {
+    const { apiKey, model } = this.configService.get("gemini", { infer: true });
+    this.gemini = apiKey ? new GoogleGenAI({ apiKey }) : null;
+    this.geminiModel = model;
+    if (!this.gemini) {
+      this.logger.warn("GEMINI_API_KEY no configurada — el OCR de cedula/licencia/tarjeta de propiedad quedara deshabilitado.");
+    }
+  }
 
   // Corre OCR sobre una foto (vale, tarjeta de propiedad, etc). Si falla o
   // se demora demasiado (foto ilegible, error del motor, sin red para bajar
@@ -120,250 +205,337 @@ export class OcrService {
     };
   }
 
-  // Punto de entrada para la foto de tarjeta de propiedad: prueba la imagen
-  // en varias rotaciones (las fotos de celular llegan giradas con mucha
-  // frecuencia y Tesseract no corrige orientacion por si solo) y se queda
-  // con la que mas campos logro leer. Nunca lanza — ante cualquier falla
-  // devuelve todo en null para que el usuario complete el formulario a mano.
-  async extractVehicleRegistrationFromImage(
-    imageBuffer: Buffer,
-  ): Promise<{ rawText: string; extraction: VehicleRegistrationExtraction }> {
-    const empty = { plate: null, brand: null, line: null, modelYear: null, licenseNumber: null };
-    try {
-      return await this.withTimeout(
-        this.runVehicleRegistrationRotations(imageBuffer),
-        REGISTRATION_OCR_TIMEOUT_MS,
-      );
-    } catch (error) {
-      // El mensaje suele decir la causa real (ej. formato de imagen no
-      // soportado como HEIC de iPhone, que ni Jimp ni tesseract leen) — se
-      // deja como error, no warn, para que quede visible sin tener que subir
-      // el nivel de log.
-      this.logger.error(`OCR de tarjeta de propiedad fallo: ${(error as Error).message}`, (error as Error).stack);
+  // Detecta el mime type real de la foto (JPEG/PNG/WEBP/HEIC) mirando los
+  // primeros bytes — el nombre de archivo o el Content-Type del navegador no
+  // siempre son confiables, y Gemini necesita el mime type correcto.
+  private detectImageMimeType(buffer: Buffer): string {
+    if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
+    if (buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return "image/png";
+    if (buffer.length >= 12 && buffer.toString("ascii", 8, 12) === "WEBP") return "image/webp";
+    return "image/jpeg";
+  }
+
+  // Motor comun para los 4 tipos de documento: le manda la foto a Gemini con
+  // un prompt especifico y un schema JSON estricto (asi la respuesta ya
+  // viene tipada, sin tener que parsear texto libre) y devuelve el objeto
+  // parseado. Nunca lanza — sin API key, con la red caida, o si Gemini no
+  // logra leer la foto, devuelve `empty` para que el usuario complete el
+  // formulario a mano, igual que hacia la version con tesseract.js.
+  private async extractWithGemini<T>(
+    imageBuffers: Buffer[],
+    logLabel: string,
+    prompt: string,
+    responseSchema: Record<string, unknown>,
+    empty: T,
+  ): Promise<{ rawText: string; extraction: T }> {
+    if (!this.gemini) {
       return { rawText: "", extraction: empty };
     }
+
+    const gemini = this.gemini;
+    const callGemini = () =>
+      this.withTimeout(
+        gemini.models.generateContent({
+          model: this.geminiModel,
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { text: prompt },
+                ...imageBuffers.map((buffer) => ({
+                  inlineData: { mimeType: this.detectImageMimeType(buffer), data: buffer.toString("base64") },
+                })),
+              ],
+            },
+          ],
+          config: { responseMimeType: "application/json", responseSchema },
+        }),
+        GEMINI_TIMEOUT_MS,
+      );
+
+    // El tier gratuito de Gemini a veces devuelve 503 "high demand" o 429
+    // "resource exhausted" — errores transitorios, no un problema de la
+    // foto. Con el volumen bajo de este proyecto (decenas de fotos al mes)
+    // vale la pena un reintento corto antes de rendirse y dejar los campos
+    // en null.
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const response = await callGemini();
+        const rawText = response.text ?? "";
+        const parsed = JSON.parse(rawText) as T;
+        return { rawText, extraction: { ...empty, ...parsed } };
+      } catch (error) {
+        const message = (error as Error).message;
+        const isRetryable = /503|429|UNAVAILABLE|RESOURCE_EXHAUSTED/.test(message);
+        if (attempt === 1 && isRetryable) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          continue;
+        }
+        // El mensaje suele decir la causa real (ej. imagen rechazada por
+        // filtros de seguridad, JSON invalido, o timeout) — se deja como
+        // error, no warn, para que quede visible sin subir el nivel de log.
+        this.logger.error(`OCR Gemini (${logLabel}) fallo: ${message}`, (error as Error).stack);
+        return { rawText: "", extraction: empty };
+      }
+    }
+    return { rawText: "", extraction: empty };
   }
 
-  private async runVehicleRegistrationRotations(
-    imageBuffer: Buffer,
+  // Punto de entrada para las fotos de la tarjeta de propiedad (licencia de
+  // transito colombiana) — frente y reverso en un solo llamado a Gemini para
+  // que combine lo que lee en cada lado (algunos datos, como el numero de
+  // licencia de transito, a veces solo estan legibles en una de las dos
+  // caras segun la foto). Best-effort: cualquier campo que Gemini no logre
+  // leer con certeza queda en null.
+  async extractVehicleRegistrationFromImages(
+    imageBuffers: Buffer[],
   ): Promise<{ rawText: string; extraction: VehicleRegistrationExtraction }> {
-    const worker = await createWorker("spa");
-    try {
-      let best: { rawText: string; extraction: VehicleRegistrationExtraction; score: number } | null = null;
+    const emptyExtraction: VehicleRegistrationExtraction = {
+      country: null,
+      licenseNumber: null,
+      licenseBarcode: null,
+      plate: null,
+      brand: null,
+      line: null,
+      modelYear: null,
+      cc: null,
+      color: null,
+      serviceType: null,
+      vehicleClass: null,
+      bodyType: null,
+      fuelType: null,
+      loadCapacity: null,
+      engineNumber: null,
+      serialNumber: null,
+      vin: null,
+      chassisNumber: null,
+      ownerName: null,
+      ownerDocumentNumber: null,
+      mobilityRestriction: null,
+      armor: null,
+      horsepower: null,
+      importDeclaration: null,
+      importDate: null,
+      doors: null,
+      propertyLimitation: null,
+      registrationDate: null,
+      licenseIssueDate: null,
+      licenseExpirationDate: null,
+      transitAuthority: null,
+    };
+    const stringField = (description: string) => ({ type: Type.STRING, nullable: true, description });
 
-      for (const angle of ROTATIONS_TO_TRY) {
-        const preprocessed = await this.preprocessForOcr(imageBuffer, angle);
-        const {
-          data: { text },
-        } = await worker.recognize(preprocessed);
-        const extraction = this.extractVehicleRegistration(text);
-        const score = this.scoreRegistrationExtraction(extraction);
-
-        // Diagnostico: sin esto, cuando una foto no calza con ningun
-        // patron no hay forma de saber si el OCR leyo texto ilegible o si
-        // simplemente no lo intento (foto en un formato que no se pudo
-        // decodificar, por ejemplo).
-        this.logger.debug(
-          `OCR tarjeta rotacion=${angle}° score=${score} texto="${text.replace(/\s+/g, " ").trim().slice(0, 200)}"`,
-        );
-
-        if (!best || score > best.score) {
-          best = { rawText: text, extraction, score };
-        }
-        if (score >= GOOD_ENOUGH_SCORE) {
-          break;
-        }
-      }
-
-      return { rawText: best!.rawText, extraction: best!.extraction };
-    } finally {
-      await worker.terminate();
-    }
+    return this.extractWithGemini(
+      imageBuffers,
+      "tarjeta",
+      "Estas son fotos de una tarjeta de propiedad (licencia de transito) colombiana — la primera imagen es el " +
+        "frente y, si hay una segunda, es el reverso de la misma tarjeta. Lee TODOS los campos que encuentres en " +
+        "ambas caras del documento, no solo los principales. Si algun dato no se alcanza a leer con certeza, o el " +
+        "campo no aparece en el documento, devuelve null en ese campo en vez de adivinar. Las fechas devuelvelas " +
+        "en formato ISO (YYYY-MM-DD) cuando el dia y mes sean claros; si no, devuelve el texto tal como aparece.",
+      {
+        type: Type.OBJECT,
+        properties: {
+          country: stringField("Pais de expedicion del documento, normalmente COLOMBIA"),
+          licenseNumber: stringField("Numero de la licencia de transito"),
+          licenseBarcode: stringField("Codigo de barras inferior de la tarjeta (LIC)"),
+          plate: stringField("Placa del vehiculo, ej. ABC123"),
+          brand: stringField("Marca del vehiculo, ej. CHEVROLET"),
+          line: stringField("Linea/referencia del vehiculo, ej. AVEO"),
+          modelYear: stringField("Modelo (año) del vehiculo, ej. 2006"),
+          cc: stringField("Cilindrada (CC)"),
+          color: stringField("Color del vehiculo"),
+          serviceType: stringField("Servicio (ej. Particular, Publico)"),
+          vehicleClass: stringField("Clase de vehiculo segun la tarjeta (ej. Camion, Camioneta)"),
+          bodyType: stringField("Tipo de carroceria"),
+          fuelType: stringField("Combustible (ej. Diesel, Gasolina)"),
+          loadCapacity: stringField("Capacidad de carga/pasajeros impresa en la tarjeta (Kg o PSJ), con la unidad"),
+          engineNumber: stringField("Numero de motor"),
+          serialNumber: stringField("Numero de serie"),
+          vin: stringField("VIN"),
+          chassisNumber: stringField("Numero de chasis"),
+          ownerName: stringField("Nombre o razon social del propietario"),
+          ownerDocumentNumber: stringField("Numero de identificacion del propietario"),
+          mobilityRestriction: stringField("Restriccion de movilidad (pico y placa, etc)"),
+          armor: stringField("Blindaje"),
+          horsepower: stringField("Potencia en HP"),
+          importDeclaration: stringField("Numero de declaracion de importacion"),
+          importDate: stringField("Fecha de importacion, formato ISO YYYY-MM-DD si es clara"),
+          doors: stringField("Numero de puertas"),
+          propertyLimitation: stringField("Limitacion a la propiedad (prenda, embargo, etc)"),
+          registrationDate: stringField("Fecha de matricula, formato ISO YYYY-MM-DD si es clara"),
+          licenseIssueDate: stringField("Fecha de expedicion de la licencia de transito, formato ISO YYYY-MM-DD si es clara"),
+          licenseExpirationDate: stringField("Fecha de vencimiento, formato ISO YYYY-MM-DD si es clara"),
+          transitAuthority: stringField("Organismo de transito que expidio el documento"),
+        },
+        required: Object.keys(emptyExtraction),
+      },
+      emptyExtraction,
+    );
   }
 
-  // Reduce el tamano (las fotos de camara vienen enormes), pasa a escala de
-  // grises y sube el contraste (ayuda mucho cuando el texto esta sobre un
-  // fondo con patron/marca de agua, como en la tarjeta de propiedad), y rota
-  // si hace falta, antes de pasarla al motor de OCR.
-  private async preprocessForOcr(imageBuffer: Buffer, degrees: number): Promise<Buffer> {
-    const image = await Jimp.read(imageBuffer);
-    if (image.width > MAX_OCR_IMAGE_WIDTH) {
-      image.resize({ w: MAX_OCR_IMAGE_WIDTH });
-    } else if (image.width < MIN_OCR_IMAGE_WIDTH) {
-      image.resize({ w: MIN_OCR_IMAGE_WIDTH });
-    }
-    image.greyscale();
-    image.contrast(0.3);
-    if (degrees !== 0) {
-      image.rotate(degrees);
-    }
-    return image.getBuffer(JimpMime.jpeg);
+  // Punto de entrada para las fotos de la cedula de ciudadania (frente y
+  // reverso) — un solo llamado a Gemini para que combine lo que lee en
+  // ambas caras, igual que la tarjeta de propiedad de vehiculos.
+  async extractCedulaFromImages(imageBuffers: Buffer[]): Promise<{ rawText: string; extraction: CedulaExtraction }> {
+    const emptyExtraction: CedulaExtraction = {
+      documentType: null,
+      country: null,
+      documentNumber: null,
+      lastName: null,
+      firstName: null,
+      nationality: null,
+      height: null,
+      sex: null,
+      birthDate: null,
+      bloodType: null,
+      birthPlace: null,
+      issuePlace: null,
+      documentExpirationDate: null,
+      supportNumber: null,
+      mrz: null,
+    };
+    const stringField = (description: string) => ({ type: Type.STRING, nullable: true, description });
+
+    const { rawText, extraction } = await this.extractWithGemini(
+      imageBuffers,
+      "cedula",
+      "Estas son fotos de una cedula de ciudadania colombiana — la primera imagen es el frente y, si hay una " +
+        "segunda, es el reverso del mismo documento. Lee TODOS los campos que encuentres en ambas caras, no solo " +
+        "los principales. El numero de documento (NUIP) puede aparecer con puntos como separador de miles: " +
+        "quitalos y devuelve solo digitos. Las fechas devuelvelas en formato ISO (YYYY-MM-DD): interpreta el " +
+        "formato colombiano DIA-MES-AÑO (nunca mes-dia-año). Si algun dato no se alcanza a leer con certeza, o el " +
+        "campo no aparece en el documento, devuelve null en vez de adivinar.",
+      {
+        type: Type.OBJECT,
+        properties: {
+          documentType: stringField("Tipo de documento, ej. CC"),
+          country: stringField("Pais de expedicion, normalmente COLOMBIA"),
+          documentNumber: stringField("Numero de documento/NUIP, solo digitos"),
+          lastName: stringField("Apellidos de la persona"),
+          firstName: stringField("Nombres de la persona"),
+          nationality: stringField("Nacionalidad"),
+          height: stringField("Estatura"),
+          sex: stringField("Sexo"),
+          birthDate: stringField("Fecha de nacimiento, formato ISO YYYY-MM-DD si es clara"),
+          bloodType: stringField("Grupo sanguineo/factor RH (G.S.)"),
+          birthPlace: stringField("Lugar de nacimiento"),
+          issuePlace: stringField("Fecha y lugar de expedicion, tal como aparece impreso"),
+          documentExpirationDate: stringField("Fecha de expiracion/vencimiento del documento, formato ISO YYYY-MM-DD si es clara"),
+          supportNumber: stringField("Numero de soporte/serie del documento (reverso)"),
+          mrz: stringField("Codigo de lectura mecanica (MRZ) si el documento lo trae (reverso)"),
+        },
+        required: Object.keys(emptyExtraction),
+      },
+      emptyExtraction,
+    );
+
+    extraction.birthDate = this.normalizeDateString(extraction.birthDate);
+    extraction.documentExpirationDate = this.normalizeDateString(extraction.documentExpirationDate);
+
+    return { rawText, extraction };
   }
 
-  private scoreRegistrationExtraction(extraction: VehicleRegistrationExtraction): number {
-    return Object.values(extraction).filter((value) => value !== null).length;
+  // Punto de entrada para las fotos de la licencia de conduccion (frente y
+  // reverso) — un solo llamado a Gemini que combina ambas caras.
+  async extractDriverLicenseFromImages(
+    imageBuffers: Buffer[],
+  ): Promise<{ rawText: string; extraction: DriverLicenseExtraction }> {
+    const emptyExtraction: DriverLicenseExtraction = {
+      country: null,
+      documentType: null,
+      licenseNumber: null,
+      licenseBarcode: null,
+      fullName: null,
+      documentNumber: null,
+      birthDate: null,
+      issueDate: null,
+      bloodType: null,
+      restrictions: null,
+      issuingAuthority: null,
+      categories: [],
+    };
+    const stringField = (description: string) => ({ type: Type.STRING, nullable: true, description });
+
+    const { rawText, extraction } = await this.extractWithGemini(
+      imageBuffers,
+      "licencia",
+      "Estas son fotos de una licencia de conduccion colombiana — la primera imagen es el frente y, si hay una " +
+        "segunda, es el reverso de la misma licencia. Lee TODOS los campos que encuentres en ambas caras. " +
+        "En el frente: el numero de documento aparece como 'No.' junto al numero de la licencia (es el mismo " +
+        "numero de cedula de la persona, distinto del numero de LC), el nombre completo bajo la etiqueta " +
+        "'NOMBRE', fecha de nacimiento, fecha de expedicion, sangre/RH, restricciones del conductor, y el " +
+        "organismo de transito expedidor. En el reverso hay una tabla 'CATEGORIAS AUTORIZADAS' con una fila por " +
+        "cada categoria autorizada (ej. una fila 'B2' y otra fila 'C2' por separado, cada una con su PROPIA " +
+        "clase de vehiculo, vigencia y servicio — NO las combines en una sola fila, devuelve un elemento del " +
+        "array 'categories' por cada fila de la tabla). Ademas hay un numero de licencia con el formato 'LC' " +
+        "seguido de digitos debajo del codigo de barras (ej. LC06003009573). Las fechas devuelvelas en formato " +
+        "ISO (YYYY-MM-DD): interpreta el formato colombiano DIA-MES-AÑO (nunca mes-dia-año). Si algun dato no se " +
+        "alcanza a leer con certeza, o el campo no aparece, devuelve null.",
+      {
+        type: Type.OBJECT,
+        properties: {
+          country: stringField("Pais/entidad que expide la licencia"),
+          documentType: stringField("Tipo de documento, ej. 'Licencia de conduccion'"),
+          licenseNumber: stringField("Numero de LC con prefijo, ej. LC06003009573 (reverso)"),
+          licenseBarcode: stringField("Codigo de barras/identificador inferior si es distinto del numero de LC"),
+          fullName: stringField("Nombre completo de la persona (frente)"),
+          documentNumber: stringField("Numero de documento/cedula impreso como 'No.' en el frente, solo digitos"),
+          birthDate: stringField("Fecha de nacimiento (frente), formato ISO YYYY-MM-DD si es clara"),
+          issueDate: stringField("Fecha de expedicion (frente), formato ISO YYYY-MM-DD si es clara"),
+          bloodType: stringField("Sangre/factor RH (frente)"),
+          restrictions: stringField("Restricciones del conductor (frente)"),
+          issuingAuthority: stringField("Organismo de transito expedidor (frente)"),
+          categories: {
+            type: Type.ARRAY,
+            description: "Una fila por cada categoria autorizada en la tabla del reverso",
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                category: stringField("Categoria de esta fila, ej. 'C2'"),
+                vehicleClass: stringField("Clase de vehiculo de esta fila"),
+                expiration: stringField("Vigencia de esta fila, formato ISO YYYY-MM-DD si es clara"),
+                serviceType: stringField("Servicio de esta fila (PARTICULAR/PUBLICO)"),
+              },
+              required: ["category", "vehicleClass", "expiration", "serviceType"],
+            },
+          },
+        },
+        required: Object.keys(emptyExtraction),
+      },
+      emptyExtraction,
+    );
+
+    // Las fechas que Gemini no logra convertir a ISO por su cuenta (a pesar
+    // de que el prompt lo pide) vienen en formato colombiano DD-MM-YYYY —
+    // se normalizan aca para que nunca lleguen crudas al validador del DTO
+    // (@IsDateString), que rechaza cualquier formato que no sea ISO 8601.
+    extraction.birthDate = this.normalizeDateString(extraction.birthDate);
+    extraction.issueDate = this.normalizeDateString(extraction.issueDate);
+    extraction.categories = extraction.categories.map((entry) => ({
+      ...entry,
+      expiration: this.normalizeDateString(entry.expiration),
+    }));
+
+    return { rawText, extraction };
   }
 
-  private readonly PLATE_PATTERN = /\b[A-Z]{3}\d{2,3}[A-Z]?\b/;
-  private readonly BRAND_PATTERN = /\b[A-ZÀ-Ý][A-ZÀ-Ý0-9]{1,19}\b/;
-  private readonly YEAR_PATTERN = /\b(19|20)\d{2}\b/;
+  // Convierte fechas en formato colombiano (DD-MM-YYYY o DD/MM/YYYY) a ISO
+  // (YYYY-MM-DD). Si ya viene en ISO, o no calza con ningun formato
+  // reconocido, se devuelve tal cual (mejor un dato crudo que uno inventado).
+  private normalizeDateString(raw: string | null): string | null {
+    if (!raw) return raw;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
 
-  // Lee una foto de tarjeta de propiedad (licencia de transito colombiana).
-  // El documento es una tabla, no texto lineal "etiqueta: valor" — el OCR
-  // por eso es heuristico y best-effort: cada campo que no se logre leer
-  // queda en null para que el usuario lo complete/corrija a mano.
-  //
-  // "Linea" es aparte de los otros 3 (placa/marca/modelo): no tiene un
-  // patron de valor propio confiable (puede ser una palabra como "AVEO" o
-  // varias como "HUNK 160 FI ST", y a veces la etiqueta vecina "MODELO" sale
-  // ilegible del OCR y se confundiria con el valor). En vez de adivinar
-  // donde empieza y termina, siempre se deriva DESPUES, como lo que hay
-  // entre el final del valor de marca y el inicio del valor de modelo — dos
-  // puntos que si se localizan con patrones confiables.
-  extractVehicleRegistration(text: string): VehicleRegistrationExtraction {
-    // Sin quitar tildes, "TRÁNSITO" no calzaria con /transito/i (el flag i
-    // no pliega acentos) — el resto de valores (placas, marcas, anos) no
-    // usa caracteres acentuados, asi que normalizar todo el texto es seguro.
-    const normalized = this.stripAccents(text.replace(/\r/g, ""));
+    const match = /^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/.exec(raw.trim());
+    if (!match) return raw;
 
-    // Metodo 1: la etiqueta y su valor quedan pegados (ej. "PLACA\nBYN613"
-    // o "PLACA BYN613 MARCA CHEVROLET" en la misma linea).
-    let plate = this.extractNear(normalized, /placa/i, this.PLATE_PATTERN);
-    let brand = this.extractNear(normalized, /marca/i, this.BRAND_PATTERN);
-    let modelYear = this.extractNear(normalized, /modelo/i, this.YEAR_PATTERN);
+    const [, day, month, year] = match;
+    const dd = day!.padStart(2, "0");
+    const mm = month!.padStart(2, "0");
+    if (Number(mm) < 1 || Number(mm) > 12 || Number(dd) < 1 || Number(dd) > 31) return raw;
 
-    // Metodo 2 (respaldo): el formato oficial de la tarjeta trae las 4
-    // etiquetas juntas en una fila y los 4 valores en la fila de abajo
-    // (ej. "PLACA MARCA LINEA MODELO" / "BYN613 CHEVROLET AVEO 2006") — ahi
-    // el valor de PLACA no esta cerca de la palabra "PLACA", esta despues
-    // de las otras 3 etiquetas. Se busca en el texto que sigue a la ULTIMA
-    // etiqueta encontrada, tomando los valores en el mismo orden fijo en que
-    // siempre aparecen impresas en el documento oficial.
-    if (!plate || !brand || !modelYear) {
-      const labelMatches = [/placa/i, /marca/i, /linea/i, /modelo/i]
-        .map((re) => re.exec(normalized))
-        .filter((m): m is RegExpExecArray => m !== null);
-
-      if (labelMatches.length > 0) {
-        const lastLabelEnd = Math.max(...labelMatches.map((m) => m.index + m[0].length));
-        const valuesArea = normalized.slice(lastLabelEnd, lastLabelEnd + 200);
-
-        let cursor = 0;
-        if (!plate) {
-          const m = this.PLATE_PATTERN.exec(valuesArea);
-          if (m) {
-            plate = m[0].trim();
-            cursor = m.index + m[0].length;
-          }
-        }
-        if (!brand) {
-          const m = this.BRAND_PATTERN.exec(valuesArea.slice(cursor));
-          if (m) {
-            brand = m[0].trim();
-            cursor += m.index + m[0].length;
-          }
-        }
-        if (!modelYear) {
-          const m = this.YEAR_PATTERN.exec(valuesArea.slice(cursor));
-          if (m) modelYear = m[0].trim();
-        }
-      }
-    }
-
-    // Metodo 3 (ultimo recurso, sin etiquetas): en fotos de baja resolucion
-    // el OCR a veces pierde TODAS las etiquetas (letra chica e ilegible)
-    // pero igual lee bien los valores (letra grande en negrita) — confirmado
-    // en pruebas reales. Si no se encontro ni una sola etiqueta, se busca
-    // directamente el patron de placa en todo el texto como ancla, y se
-    // toman marca/modelo en el mismo orden fijo de siempre, justo despues de
-    // ella. Mas propenso a datos incorrectos que los metodos anteriores,
-    // pero el usuario revisa el formulario antes de confirmar.
-    if (!plate) {
-      const m = this.PLATE_PATTERN.exec(normalized);
-      if (m) {
-        plate = m[0].trim();
-        const afterPlate = normalized.slice(m.index + m[0].length, m.index + m[0].length + 200);
-
-        let cursor = 0;
-        if (!brand) {
-          const bm = this.BRAND_PATTERN.exec(afterPlate);
-          if (bm) {
-            brand = bm[0].trim();
-            cursor = bm.index + bm[0].length;
-          }
-        }
-        if (!modelYear) {
-          const ym = this.YEAR_PATTERN.exec(afterPlate.slice(cursor));
-          if (ym) modelYear = ym[0].trim();
-        }
-      }
-    }
-
-    const line = this.deriveLineBetween(normalized, brand, modelYear);
-
-    return { plate, brand, line, modelYear, licenseNumber: this.extractLicenseNumber(normalized) };
-  }
-
-  // "Linea" = lo que hay entre el final del valor de marca y el inicio del
-  // valor de modelo, en el texto real (no en una sub-ventana ya recortada) —
-  // busca la posicion literal de ambos valores para no depender de por cual
-  // metodo se encontraron.
-  private deriveLineBetween(text: string, brand: string | null, modelYear: string | null): string | null {
-    if (!brand) return null;
-    const brandIdx = text.indexOf(brand);
-    if (brandIdx === -1) return null;
-    const afterBrand = brandIdx + brand.length;
-
-    const yearIdx = modelYear ? text.indexOf(modelYear, afterBrand) : -1;
-    const lineArea =
-      yearIdx > -1 ? text.slice(afterBrand, yearIdx) : this.windowUntilNextLabel(text, afterBrand, 40);
-
-    // En el layout "apilado" (etiqueta y valor cada uno en su propia linea)
-    // este tramo trae la propia etiqueta "LINEA" pegada antes del valor, y a
-    // veces "MODELO" pegada despues — se descartan como ruido; en el layout
-    // de fila de etiquetas + fila de valores el tramo ya viene limpio y esto
-    // no cambia nada.
-    const withoutLabels = lineArea.replace(/\b(placa|marca|linea|modelo)\b/gi, " ");
-    const collapsed = withoutLabels.replace(/\s+/g, " ").trim();
-    return collapsed || null;
-  }
-
-  // Otras etiquetas conocidas de la tarjeta — sirven para cortar la ventana
-  // de busqueda de un valor ANTES de que se meta a la siguiente etiqueta,
-  // que pasa seguido cuando el OCR pone etiqueta y valor en la misma linea
-  // (ej. "LINEA AVEO MODELO 2006" sin salto de linea entre campos).
-  private readonly NEXT_LABEL =
-    /\b(placa|marca|linea|modelo|licencia|cilindrada|color|clase|carroceria|combustible|servicio|capacidad)\b/i;
-
-  private windowUntilNextLabel(text: string, start: number, maxLen: number): string {
-    const raw = text.slice(start, start + maxLen);
-    const nextLabelMatch = this.NEXT_LABEL.exec(raw);
-    return nextLabelMatch ? raw.slice(0, nextLabelMatch.index) : raw;
-  }
-
-  // Busca la etiqueta y devuelve la primera coincidencia del patron de
-  // valor dentro de una ventana corta de texto inmediatamente despues
-  // (misma linea o la siguiente — el OCR de una tabla no siempre alinea
-  // etiqueta y valor en la misma linea), sin pasarse a la siguiente etiqueta.
-  private extractNear(text: string, label: RegExp, valuePattern: RegExp): string | null {
-    const labelMatch = label.exec(text);
-    if (!labelMatch) return null;
-
-    const window = this.windowUntilNextLabel(text, labelMatch.index + labelMatch[0].length, 60);
-    const valueMatch = valuePattern.exec(window);
-    return valueMatch?.[0]?.trim() ?? null;
-  }
-
-  private extractLicenseNumber(text: string): string | null {
-    // "LICENCIA DE TRANSITO No 10034039969" — se ancla a esas dos palabras
-    // en vez de buscar la corrida de digitos mas larga del documento, para
-    // no confundirla con la cedula del propietario u otro numero largo.
-    const anchor = /licencia[\s\S]{0,10}transito[\s\S]{0,20}?((?:\d[\s.]?){8,12})/i.exec(text);
-    if (anchor?.[1]) {
-      const digits = anchor[1].replace(/[^\d]/g, "");
-      if (digits.length >= 8) return digits;
-    }
-    return null;
+    return `${year}-${mm}-${dd}`;
   }
 
   private extractQuantity(text: string): { quantity: number | null; unit: "TON" | "CUBIC_METER" | null } {

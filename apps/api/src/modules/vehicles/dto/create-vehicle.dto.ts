@@ -61,4 +61,35 @@ export class CreateVehicleDto {
   @IsString()
   @MinLength(3)
   licenseNumber?: string;
+
+  // Resto de campos de la tarjeta de propiedad (frente y reverso) — todos
+  // opcionales, en texto libre, autocompletados por el registro con IA
+  // (ver POST /vehicles/extract-registration). Sin validacion de formato
+  // mas alla de ser texto: vienen de OCR best-effort.
+  @ApiPropertyOptional() @IsOptional() @IsString() country?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() licenseBarcode?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() cc?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() color?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() serviceType?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() vehicleClass?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() bodyType?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() fuelType?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() loadCapacity?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() engineNumber?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() serialNumber?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() vin?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() chassisNumber?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() ownerName?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() ownerDocumentNumber?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() mobilityRestriction?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() armor?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() horsepower?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() importDeclaration?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() importDate?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() doors?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() propertyLimitation?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() registrationDate?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() licenseIssueDate?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() licenseExpirationDate?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() transitAuthority?: string;
 }

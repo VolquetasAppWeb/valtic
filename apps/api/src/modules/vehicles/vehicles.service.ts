@@ -245,18 +245,26 @@ export class VehiclesService {
     return toPaginatedResponse(items, query.page, query.pageSize, totalItems);
   }
 
-  // Lee una foto de tarjeta de propiedad y devuelve los campos que pudo
-  // identificar (placa, marca, linea, modelo/año, numero de licencia de
-  // transito), sin persistir nada — el formulario de creacion se autocompleta
-  // con esto pero el usuario puede corregirlo antes de confirmar.
-  async extractRegistration(file: Express.Multer.File): Promise<VehicleRegistrationExtraction> {
-    const { extraction } = await this.ocrService.extractVehicleRegistrationFromImage(file.buffer);
+  // Lee las fotos de tarjeta de propiedad (frente y, si se sube, reverso) y
+  // devuelve los campos que pudo identificar (placa, marca, linea,
+  // modelo/año, numero de licencia de transito), sin persistir nada — el
+  // registro automatico usa esto para autocompletar y crear el vehiculo.
+  async extractRegistration(files: Express.Multer.File[]): Promise<VehicleRegistrationExtraction> {
+    const { extraction } = await this.ocrService.extractVehicleRegistrationFromImages(files.map((f) => f.buffer));
     return extraction;
   }
 
-  // Guarda la foto de tarjeta de propiedad en el historico del vehiculo
-  // (nunca sobreescribe: cada carga queda como una fila nueva).
-  async uploadDocument(tenantId: string, vehicleId: string, file: Express.Multer.File, actor: AuthenticatedUser) {
+  // Guarda una foto en el historico del vehiculo (nunca sobreescribe: cada
+  // carga queda como una fila nueva). `kind` distingue frente/reverso de la
+  // tarjeta de propiedad y foto de la volqueta de subidas sueltas (OTHER,
+  // el default) para poder agruparlas en la vista de detalle.
+  async uploadDocument(
+    tenantId: string,
+    vehicleId: string,
+    file: Express.Multer.File,
+    actor: AuthenticatedUser,
+    kind?: "REGISTRATION_FRONT" | "REGISTRATION_BACK" | "VEHICLE_PHOTO" | "OTHER",
+  ) {
     await this.assertExists(tenantId, vehicleId, actor);
 
     const stored = await this.storageService.save(file, `vehicles/${vehicleId}/documents`);
@@ -270,6 +278,7 @@ export class VehiclesService {
         mimeType: stored.mimeType,
         fileSize: stored.fileSize,
         uploadedById: actor.kind === "user" ? actor.sub : null,
+        ...(kind ? { kind } : {}),
       },
     });
   }

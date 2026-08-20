@@ -191,6 +191,17 @@ enum EvidenceType {
   OTHER
 }
 
+// Distingue las fotos que trae el registro automatico de vehiculo (tarjeta
+// de propiedad frente/reverso, foto de la volqueta) de subidas sueltas
+// posteriores (OTHER) — sirve para agrupar/etiquetar las fotos en la vista
+// "Ver informacion" del vehiculo.
+enum VehicleDocumentKind {
+  REGISTRATION_FRONT
+  REGISTRATION_BACK
+  VEHICLE_PHOTO
+  OTHER
+}
+
 enum SettlementStatus {
   DRAFT
   APPROVED
@@ -224,6 +235,7 @@ model Tenant {
   fleetOwners        FleetOwner[]
   vehicles           Vehicle[]
   vehicleDocuments   VehicleDocument[]
+  driverDocuments    DriverDocument[]
   assignments        DriverVehicleAssignment[]
   projects           Project[]
   operationalSites   OperationalSite[]
@@ -276,6 +288,7 @@ model User {
   managedFleetOwners  FleetOwner[]    @relation("DispatcherFleetOwners")
   managedRates        Rate[]          @relation("DispatcherRates")
   uploadedVehicleDocuments VehicleDocument[] @relation("VehicleDocumentUploadedBy")
+  uploadedDriverDocuments DriverDocument[] @relation("DriverDocumentUploadedBy")
   deletedDrivers      Driver[]        @relation("DriverDeletedBy")
   deletedVehicles     Vehicle[]       @relation("VehicleDeletedBy")
 
@@ -372,13 +385,50 @@ model Driver {
   documentNumber     String
   firstName          String
   lastName           String
-  phone              String
   pinHash            String
+  // PIN cifrado (no el hash de argon2, irreversible) para poder mostrarlo
+  // de nuevo despues de creado — nullable porque conductores anteriores a
+  // este campo no lo tienen (solo se puede "Restablecer PIN" para ellos).
+  pinEncrypted       String?
   pinFailedAttempts  Int          @default(0)
   pinLockedUntil     DateTime?
   lastLoginAt        DateTime?
   licenseNumber      String
+  // Codigos de categoria autorizados, unidos por coma (ej. "B2, C2") —
+  // derivado de licenseCategories, sirve para busqueda/listado rapido sin
+  // tener que parsear el JSON.
+  licenseCategory    String?
+  // Vigencia mas proxima entre todas las categorias autorizadas (la fecha
+  // en que hay que estar pendiente de renovar) — derivado de
+  // licenseCategories al crear/editar el conductor.
   licenseExpiration  DateTime
+  // Cada categoria autorizada tiene su PROPIA vigencia y servicio (ej. "B2"
+  // vigente hasta 2034 para uso particular, "C2" vigente hasta 2027 para
+  // uso publico) — se guarda la tabla completa tal como viene de la
+  // licencia para poder mostrarla igual y para el chequeo de compatibilidad
+  // al asignar un vehiculo (ver DriverVehicleAssignmentsService).
+  // Forma: Array<{ category, vehicleClass, expiration, serviceType }>
+  licenseCategories  Json?
+
+  // Resto de campos leidos de la cedula y la licencia de conduccion (frente
+  // y reverso de ambas) — todos opcionales y en texto libre, vienen de OCR
+  // best-effort igual que los campos extra de Vehicle. Se autocompletan con
+  // el registro con IA; el usuario los puede corregir despues editando.
+  country                String? // Pais (cedula)
+  nationality            String?
+  height                 String? // Estatura
+  sex                    String?
+  birthDate              String? // Fecha de nacimiento
+  bloodType              String? // G.S. / Sangre-RH
+  birthPlace             String? // Lugar de nacimiento
+  issuePlace             String? // Fecha y lugar de expedicion (cedula)
+  documentExpirationDate String? // Fecha de expiracion/vencimiento de la cedula
+  supportNumber          String? // Numero de soporte/serie (reverso cedula)
+  mrz                    String? // Codigo de lectura mecanica (reverso cedula), si trae
+  licenseIssuingAuthority String? // Organismo de transito expedidor (licencia)
+  licenseRestrictions    String? // Restricciones del conductor (licencia)
+  licenseIssueDate       String? // Fecha de expedicion de la licencia
+
   status             DriverStatus @default(ACTIVE)
   // Dispatcher "dueno" del conductor: null si lo creo un TENANT_ADMIN (dato
   // compartido/administrativo). Un DISPATCHER solo ve/gestiona los suyos.
@@ -406,11 +456,42 @@ model Driver {
   refreshTokens  DriverRefreshToken[]
   uploadedEvidences Evidence[] @relation("EvidenceUploadedByDriver")
   auditEvents    AuditEvent[] @relation("AuditActorDriver")
+  documents      DriverDocument[]
 
   @@unique([tenantId, documentNumber])
   @@index([tenantId, status])
   @@index([tenantId, dispatcherId])
   @@index([tenantId, deletedAt])
+}
+
+// Distingue las fotos del registro automatico de conductor (cedula
+// frente/reverso, licencia frente/reverso) de subidas sueltas posteriores
+// (OTHER) — mismo patron que VehicleDocumentKind.
+enum DriverDocumentKind {
+  CEDULA_FRONT
+  CEDULA_BACK
+  LICENSE_FRONT
+  LICENSE_BACK
+  OTHER
+}
+
+model DriverDocument {
+  id           String   @id @default(uuid())
+  tenantId     String
+  driverId     String
+  fileUrl      String
+  fileName     String
+  mimeType     String
+  fileSize     Int
+  uploadedById String?
+  kind         DriverDocumentKind @default(OTHER)
+  createdAt    DateTime @default(now())
+
+  tenant     Tenant @relation(fields: [tenantId], references: [id])
+  driver     Driver @relation(fields: [driverId], references: [id])
+  uploadedBy User?  @relation("DriverDocumentUploadedBy", fields: [uploadedById], references: [id])
+
+  @@index([tenantId, driverId])
 }
 
 model FleetOwner {
@@ -463,6 +544,39 @@ model Vehicle {
   // como identificador adicional del vehiculo, unico por tenant cuando se
   // conoce; nullable porque no todos los vehiculos existentes lo tienen.
   licenseNumber String?
+
+  // Resto de campos impresos en la tarjeta de propiedad colombiana (frente y
+  // reverso) — todos opcionales y en texto libre (no se fuerza un tipo mas
+  // estricto, ej. fechas o numeros, porque vienen de OCR best-effort y un
+  // formato inesperado no deberia romper el guardado). Se leen automatico
+  // en el registro con IA; el usuario los puede corregir despues editando.
+  country              String?
+  licenseBarcode       String? // Codigo de barras inferior (LIC)
+  cc                   String? // Cilindrada
+  color                String?
+  serviceType          String? // Servicio (particular, publico, etc)
+  vehicleClass         String? // Clase de vehiculo (segun la tarjeta, no el VehicleType interno)
+  bodyType             String? // Tipo carroceria
+  fuelType             String? // Combustible
+  loadCapacity         String? // Capacidad (Kg/PSJ) impresa en la tarjeta
+  engineNumber         String?
+  serialNumber         String?
+  vin                  String?
+  chassisNumber        String?
+  ownerName            String? // Nombre/razon social del propietario impreso en la tarjeta
+  ownerDocumentNumber  String? // Identificacion del propietario impresa en la tarjeta
+  mobilityRestriction  String?
+  armor                String? // Blindaje
+  horsepower           String? // Potencia (HP)
+  importDeclaration    String?
+  importDate           String?
+  doors                String?
+  propertyLimitation   String?
+  registrationDate     String? // Fecha de matricula
+  licenseIssueDate     String? // Fecha de expedicion de la licencia de transito
+  licenseExpirationDate String? // Fecha de vencimiento
+  transitAuthority     String? // Organismo de transito
+
   status       VehicleStatus @default(ACTIVE)
   // Mismo patron que Driver.dispatcherId: null si lo creo un TENANT_ADMIN.
   dispatcherId String?
@@ -504,6 +618,9 @@ model VehicleDocument {
   mimeType   String
   fileSize   Int
   uploadedById String?
+  // Nullable/default OTHER para no romper filas ya existentes creadas antes
+  // de este campo (subidas sueltas via "Ver documentos", sin distincion).
+  kind       VehicleDocumentKind @default(OTHER)
   createdAt  DateTime @default(now())
 
   tenant     Tenant  @relation(fields: [tenantId], references: [id])

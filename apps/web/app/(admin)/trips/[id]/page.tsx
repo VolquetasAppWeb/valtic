@@ -157,7 +157,7 @@ export default function TripDetailPage(): JSX.Element {
             <div>
               <p className="text-muted-foreground">Conductor</p>
               <p className="font-medium">{trip.driver.firstName} {trip.driver.lastName}</p>
-              <p className="text-xs text-muted-foreground">{trip.driver.documentNumber} · {trip.driver.phone}</p>
+              <p className="text-xs text-muted-foreground">{trip.driver.documentNumber}</p>
             </div>
             <div>
               <p className="text-muted-foreground">Vehiculo</p>

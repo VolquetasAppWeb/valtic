@@ -169,8 +169,10 @@ export class AuthService {
   }
 
   async driverLogin(documentOrPhone: string, pin: string, meta: RequestMeta): Promise<DriverLoginResult> {
+    // El telefono ya no es un campo del conductor (se elimino: no aparece
+    // en cedula ni licencia) — el login queda solo por numero de documento.
     const driver = await this.prisma.driver.findFirst({
-      where: { OR: [{ documentNumber: documentOrPhone }, { phone: documentOrPhone }], status: "ACTIVE" },
+      where: { documentNumber: documentOrPhone, status: "ACTIVE" },
     });
 
     if (!driver) {
