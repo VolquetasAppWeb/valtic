@@ -34,6 +34,37 @@ export class MaterialsService {
     return material;
   }
 
+  // Para el selector de material al crear un viaje: en vez de mostrar TODOS
+  // los materiales del tenant (facil de confundirse entre variantes), esto
+  // trae los que mas se usan de verdad (segun cuantas tarifas los
+  // referencian) — si el tenant tiene pocos materiales configurados, se
+  // completa con el resto en orden alfabetico hasta llegar a `limit`.
+  async findMostUsed(tenantId: string, limit: number) {
+    const grouped = await this.prisma.rate.groupBy({
+      by: ["materialId"],
+      where: { tenantId, deletedAt: null },
+      _count: { materialId: true },
+      orderBy: { _count: { materialId: "desc" } },
+      take: limit,
+    });
+    const topIds = grouped.map((g) => g.materialId);
+    const topMaterials = topIds.length
+      ? await this.prisma.material.findMany({ where: { id: { in: topIds }, tenantId, status: "ACTIVE" } })
+      : [];
+    const orderedTop = topIds
+      .map((id) => topMaterials.find((m) => m.id === id))
+      .filter((m): m is (typeof topMaterials)[number] => !!m);
+
+    if (orderedTop.length >= limit) return orderedTop;
+
+    const filler = await this.prisma.material.findMany({
+      where: { tenantId, status: "ACTIVE", id: { notIn: orderedTop.map((m) => m.id) } },
+      orderBy: { name: "asc" },
+      take: limit - orderedTop.length,
+    });
+    return [...orderedTop, ...filler];
+  }
+
   async findAll(tenantId: string, query: MaterialQueryDto) {
     const where = {
       tenantId,

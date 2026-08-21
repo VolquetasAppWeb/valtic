@@ -1,7 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { createWorker } from "tesseract.js";
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel, Type } from "@google/genai";
 import type { AppConfig } from "../../config/configuration";
 
 export interface VoucherExtraction {
@@ -109,26 +108,42 @@ export interface DriverLicenseExtraction {
   categories: DriverLicenseCategoryEntry[]; // Una fila por cada categoria autorizada (reverso)
 }
 
-// Etiquetas conocidas de los vales tipo "recibo de entrega de material"
-// (ej. Dromos) -> nombre legible para mostrar. La clave va sin tildes/en
-// minuscula porque asi se compara despues de normalizar el texto leido.
-const KNOWN_LABELS: Record<string, string> = {
-  cliente: "Cliente",
-  obra: "Obra",
-  fecha: "Fecha",
-  producto: "Producto",
-  transporta: "Transporta",
-  placa: "Placa",
-  conductor: "Conductor",
-  identificacion: "Identificación",
-  despachador: "Despachador",
-  observaciones: "Observaciones",
-};
+// Borrador de "Obra + Puntos operativos + Tarifas" leido de una orden de
+// trabajo/cotizacion (foto o texto pegado) que el cliente le manda al
+// despachador — evita transcribir todo a mano. Todo es best-effort y se
+// revisa/edita en pantalla antes de crear nada (ver OperationsService).
+export interface OperationsSetupExtraction {
+  // Ya no se le pide nombre/codigo de obra a Gemini: la obra no tiene un
+  // nombre propio en la dictada/escrita — cuando el despachador dice "obra:
+  // X" en realidad esta nombrando el punto de CARGUE (ver el primer site
+  // con type LOAD), no un identificador de proyecto aparte. El codigo de
+  // la obra se genera solo, en el backend, a partir de los nombres de
+  // cargue/descargue (ver OperationsService.quickSetup).
+  project: {
+    clientName: string | null;
+    description: string | null;
+    startDate: string | null;
+    endDate: string | null;
+  };
+  sites: Array<{
+    name: string | null;
+    type: "LOAD" | "UNLOAD" | "BOTH" | null;
+    address: string | null;
+  }>;
+  rates: Array<{
+    originSiteName: string | null;
+    destinationSiteName: string | null;
+    materialName: string | null;
+    rateType: "PER_TRIP" | "PER_TON" | "PER_CUBIC_METER" | "PER_KILOMETER" | "FIXED" | null;
+    value: number | null;
+    // Tipo de vehiculo/camion de esta tarifa especifica, si se menciono
+    // (ej. "sencilla" vs "B200"/doble troque pueden tener precios
+    // distintos para la misma ruta y material) — null si no se menciono
+    // ningun tipo, en cuyo caso la tarifa aplica a cualquier vehiculo.
+    vehicleType: "DUMP_TRUCK" | "DOUBLE_TRAILER" | "MINI_DUMP_TRUCK" | "TRACTOR_TRAILER" | "OTHER" | null;
+  }>;
+}
 
-// createWorker puede colgarse indefinidamente (ej. si no logra descargar el
-// modelo de idioma) sin lanzar una excepcion que el try/catch pueda atrapar
-// — por eso el limite de tiempo es imprescindible, no solo una optimizacion.
-const OCR_TIMEOUT_MS = 20_000;
 // La API de Gemini puede demorar bastante mas de lo esperado en algunos
 // llamados (picos de latencia, fotos grandes) — 60s da margen de sobra sin
 // que el usuario espere demasiado; no hay reintentos ni multiples variantes
@@ -146,32 +161,7 @@ export class OcrService {
     this.gemini = apiKey ? new GoogleGenAI({ apiKey }) : null;
     this.geminiModel = model;
     if (!this.gemini) {
-      this.logger.warn("GEMINI_API_KEY no configurada — el OCR de cedula/licencia/tarjeta de propiedad quedara deshabilitado.");
-    }
-  }
-
-  // Corre OCR sobre una foto (vale, tarjeta de propiedad, etc). Si falla o
-  // se demora demasiado (foto ilegible, error del motor, sin red para bajar
-  // el modelo de idioma), no debe tumbar ni colgar el flujo que la usa -- el
-  // archivo se guarda igual, solo sin texto extraido.
-  async extractText(imageBuffer: Buffer): Promise<string> {
-    try {
-      return await this.withTimeout(this.runOcr(imageBuffer), OCR_TIMEOUT_MS);
-    } catch (error) {
-      this.logger.warn(`OCR fallo sobre la foto: ${(error as Error).message}`);
-      return "";
-    }
-  }
-
-  private async runOcr(imageBuffer: Buffer): Promise<string> {
-    const worker = await createWorker("spa");
-    try {
-      const {
-        data: { text },
-      } = await worker.recognize(imageBuffer);
-      return text;
-    } finally {
-      await worker.terminate();
+      this.logger.warn("GEMINI_API_KEY no configurada — el OCR de cedula/licencia/tarjeta de propiedad/vale quedara deshabilitado.");
     }
   }
 
@@ -191,38 +181,106 @@ export class OcrService {
     });
   }
 
-  // Los vales tipo "recibo de entrega de material" (ej. Dromos) no traen
-  // valor en pesos: traen cantidad/volumen (ej. "Volumen: 14 M3"), numero
-  // de vale, y una serie de campos "Etiqueta: valor" (cliente, obra, placa,
-  // conductor, fecha, etc). Es una heuristica de texto, no un dato
-  // confiable — sirve solo para que admin/dispatcher lo comparen contra
-  // los datos registrados del viaje.
-  extractVoucherData(text: string): VoucherExtraction {
+  // Punto de entrada para la foto del vale/recibo de entrega de material
+  // (ej. Dromos u otro transportador) que el conductor sube al cerrar el
+  // viaje. A diferencia de la version anterior (OCR de texto plano +
+  // regex sobre etiquetas fijas), esto le pide a Gemini que lea la foto
+  // completa y devuelva TODOS los campos con etiqueta que encuentre, no
+  // solo los pocos que el regex conocia — sirve para que admin/dispatcher
+  // lo comparen contra los datos registrados del viaje, nunca lo reemplaza.
+  async extractVoucherFromImage(imageBuffer: Buffer): Promise<{ rawText: string; extraction: VoucherExtraction }> {
+    interface RawVoucherExtraction {
+      quantity: number | null;
+      unit: "TON" | "CUBIC_METER" | null;
+      voucherNumber: string | null;
+      fields: Array<{ label: string; value: string }>;
+    }
+    const emptyExtraction: RawVoucherExtraction = { quantity: null, unit: null, voucherNumber: null, fields: [] };
+
+    const { rawText, extraction } = await this.extractWithGemini<RawVoucherExtraction>(
+      [imageBuffer],
+      "vale",
+      "Esta es una foto de un vale/recibo de entrega de material (ej. vale de una volqueta, formato tipo Dromos u " +
+        "otro transportador). Lee TODOS los datos visibles en el documento, no solo los principales: numero de " +
+        "vale, cantidad/volumen entregado con su unidad, fecha, placa del vehiculo, producto/material, cliente, " +
+        "obra, transportadora, nombre del conductor, identificacion, despachador, observaciones, y cualquier otro " +
+        "campo con etiqueta que aparezca impreso o escrito a mano (incluye sellos o notas manuscritas si son " +
+        "legibles). La cantidad puede venir en metros cubicos (M3) o toneladas — identifica la unidad correcta " +
+        "segun lo que diga el documento. El numero de vale suele venir junto a 'No. Vale' o similar. Para el resto " +
+        "de campos, devuelve cada uno como un par etiqueta/valor en 'fields', usando SIEMPRE estas etiquetas en " +
+        "español cuando el campo aplique: Fecha, Placa, Producto, Cliente, Obra, Transporta, Conductor, " +
+        "Identificación, Despachador, Observaciones — y si hay otro campo que no calce con ninguna de estas, usa " +
+        "la etiqueta tal como aparece impresa. Si un dato no se alcanza a leer con certeza o no aparece en el " +
+        "documento, simplemente no lo incluyas en 'fields' (no inventes valores).",
+      {
+        type: Type.OBJECT,
+        properties: {
+          quantity: { type: Type.NUMBER, nullable: true, description: "Cantidad/volumen numerico entregado, sin unidad" },
+          unit: { type: Type.STRING, nullable: true, enum: ["TON", "CUBIC_METER"], description: "Unidad de la cantidad" },
+          voucherNumber: { type: Type.STRING, nullable: true, description: "Numero de vale" },
+          fields: {
+            type: Type.ARRAY,
+            description: "Resto de campos con etiqueta visibles en el vale, como pares etiqueta/valor",
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                label: { type: Type.STRING, description: "Etiqueta del campo, ej. Fecha, Placa, Producto, Cliente, Obra" },
+                value: { type: Type.STRING, description: "Valor leido para ese campo" },
+              },
+              required: ["label", "value"],
+            },
+          },
+        },
+        required: ["quantity", "unit", "voucherNumber", "fields"],
+      },
+      emptyExtraction,
+    );
+
+    const fields: Record<string, string> = {};
+    for (const { label, value } of extraction.fields) {
+      if (label && value) fields[label] = value;
+    }
+
     return {
-      ...this.extractQuantity(text),
-      voucherNumber: this.extractVoucherNumber(text),
-      fields: this.extractLabeledFields(text),
+      rawText,
+      extraction: { quantity: extraction.quantity, unit: extraction.unit, voucherNumber: extraction.voucherNumber, fields },
     };
   }
 
-  // Detecta el mime type real de la foto (JPEG/PNG/WEBP/HEIC) mirando los
+  // Detecta el mime type real del archivo (foto o audio) mirando los
   // primeros bytes — el nombre de archivo o el Content-Type del navegador no
-  // siempre son confiables, y Gemini necesita el mime type correcto.
-  private detectImageMimeType(buffer: Buffer): string {
+  // siempre son confiables, y Gemini necesita el mime type correcto. Los
+  // formatos de audio se revisan primero porque, a diferencia de las fotos,
+  // Gemini los usa para "escuchar" la orden de trabajo dictada (ver
+  // extractOperationsSetup) en vez de solo leer texto/imagenes.
+  private detectMediaMimeType(buffer: Buffer): string {
+    // RIFF es un contenedor generico compartido por WAV y WEBP — hay que
+    // mirar el sub-formato (bytes 8-12) para no confundir un audio WAV con
+    // una imagen WEBP, ambos empiezan igual.
+    if (buffer.length >= 12 && buffer.toString("ascii", 0, 4) === "RIFF") {
+      const subFormat = buffer.toString("ascii", 8, 12);
+      if (subFormat === "WAVE") return "audio/wav";
+      if (subFormat === "WEBP") return "image/webp";
+    }
+    if (buffer.length >= 4 && buffer.toString("ascii", 0, 4) === "OggS") return "audio/ogg";
+    if (buffer.length >= 4 && buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3) return "audio/webm";
+    if (buffer.length >= 3 && buffer.toString("ascii", 0, 3) === "ID3") return "audio/mp3";
+    if (buffer.length >= 2 && buffer[0] === 0xff && (buffer[1]! & 0xe0) === 0xe0 && (buffer[1]! & 0x06) !== 0) return "audio/mp3";
     if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
     if (buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return "image/png";
-    if (buffer.length >= 12 && buffer.toString("ascii", 8, 12) === "WEBP") return "image/webp";
     return "image/jpeg";
   }
 
-  // Motor comun para los 4 tipos de documento: le manda la foto a Gemini con
-  // un prompt especifico y un schema JSON estricto (asi la respuesta ya
-  // viene tipada, sin tener que parsear texto libre) y devuelve el objeto
-  // parseado. Nunca lanza — sin API key, con la red caida, o si Gemini no
-  // logra leer la foto, devuelve `empty` para que el usuario complete el
-  // formulario a mano, igual que hacia la version con tesseract.js.
+  // Motor comun para todos los tipos de extraccion: le manda a Gemini el
+  // texto del prompt mas cualquier archivo adjunto (fotos y/o audio — se
+  // detecta el mime type real de cada uno, ver detectMediaMimeType) junto
+  // con un schema JSON estricto (asi la respuesta ya viene tipada, sin
+  // tener que parsear texto libre) y devuelve el objeto parseado. Nunca
+  // lanza — sin API key, con la red caida, o si Gemini no logra leer el
+  // archivo, devuelve `empty` para que el usuario complete el formulario a
+  // mano, igual que hacia la version con tesseract.js.
   private async extractWithGemini<T>(
-    imageBuffers: Buffer[],
+    mediaBuffers: Buffer[],
     logLabel: string,
     prompt: string,
     responseSchema: Record<string, unknown>,
@@ -242,13 +300,28 @@ export class OcrService {
               role: "user",
               parts: [
                 { text: prompt },
-                ...imageBuffers.map((buffer) => ({
-                  inlineData: { mimeType: this.detectImageMimeType(buffer), data: buffer.toString("base64") },
+                ...mediaBuffers.map((buffer) => ({
+                  inlineData: { mimeType: this.detectMediaMimeType(buffer), data: buffer.toString("base64") },
                 })),
               ],
             },
           ],
-          config: { responseMimeType: "application/json", responseSchema },
+          // thinkingLevel "minimal" apaga (casi del todo) el "razonamiento"
+          // interno del modelo antes de responder — medido con este mismo
+          // modelo: una consulta trivial ("di hola") gastaba 173 tokens de
+          // pensamiento y tardaba ~28s; con "minimal" bajo a ~0 tokens de
+          // pensamiento. (thinkingBudget:0, la forma "oficial" de apagarlo
+          // del todo, esta API la rechaza con 400 para este modelo —
+          // "minimal" es el nivel mas bajo que si acepta.) Ninguna de estas
+          // extracciones necesita razonamiento multi-paso (es mapear texto/
+          // audio/foto a un schema fijo, no resolver un problema), asi que
+          // esto no baja la calidad, solo quita tiempo "pensando" de mas
+          // antes de escribir la respuesta.
+          config: {
+            responseMimeType: "application/json",
+            responseSchema,
+            thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+          },
         }),
         GEMINI_TIMEOUT_MS,
       );
@@ -520,6 +593,225 @@ export class OcrService {
     return { rawText, extraction };
   }
 
+  // Punto de entrada para "Configuracion automatica de obra": lee una orden
+  // de trabajo/cotizacion (foto(s), audio grabado/subido, y/o texto pegado)
+  // y arma un borrador con la obra, sus puntos operativos y las tarifas por
+  // ruta+material. Gemini "escucha" el audio directamente (sin paso de
+  // transcripcion aparte) y extrae los mismos campos que si fuera texto o
+  // foto. Los puntos NO traen coordenadas (Gemini no puede geolocalizar con
+  // precision) — el frontend las completa con busqueda de direccion antes
+  // de crear nada. Las referencias origen/destino de cada tarifa van por
+  // NOMBRE de punto (no hay ids todavia); se resuelven en pantalla de
+  // revision, donde el usuario tambien puede editar/quitar/agregar filas.
+  async extractOperationsSetup(input: {
+    imageBuffers: Buffer[];
+    audioBuffer?: Buffer;
+    text?: string;
+    // Materiales ya registrados en el tenant — se le pasan a Gemini para
+    // que reconozca cuando el material mencionado ya existe (aunque este
+    // dicho de otra forma) y reuse ese nombre exacto en vez de inventar
+    // uno nuevo. Ver el comentario "MUY IMPORTANTE sobre materiales"
+    // mas abajo.
+    existingMaterialNames?: string[];
+  }): Promise<{
+    rawText: string;
+    extraction: OperationsSetupExtraction;
+  }> {
+    const emptyExtraction: OperationsSetupExtraction = {
+      project: { clientName: null, description: null, startDate: null, endDate: null },
+      sites: [],
+      rates: [],
+    };
+    const stringField = (description: string) => ({ type: Type.STRING, nullable: true, description });
+
+    const pastedText = input.text?.trim();
+    const prompt =
+      "Eres un asistente que ayuda a un despachador de volquetas en Colombia a montar una obra nueva en el " +
+      "sistema a partir de la orden de trabajo o cotizacion que le mando el cliente (puede venir como foto de un " +
+      "papel/PDF, como texto pegado, o como un audio grabado/dictado por el despachador describiendo la obra de " +
+      "palabra — en ese caso escucha el audio completo y extrae la misma informacion que sacarias de un texto).\n\n" +
+      "IMPORTANTE sobre la palabra 'obra': la obra en si NO tiene nombre propio en el sistema — cuando el " +
+      "despachador dice 'obra: X' o 'para la obra X', X es en realidad el NOMBRE DEL PUNTO DE CARGUE (la cantera, " +
+      "el sitio de donde sale el material), no un nombre de proyecto aparte. Ej. si dice 'obra: General " +
+      "Santander', eso quiere decir que hay un punto operativo llamado 'General Santander' con type LOAD — no lo " +
+      "pongas en ningun campo de 'obra/proyecto', ponlo como un site.\n\n" +
+      "Extrae: 1) los datos generales del proyecto que SI son propios de la obra: cliente y fechas (nombre y " +
+      "codigo NO se piden, se generan solos a partir de los puntos operativos); 2) la lista de puntos operativos " +
+      "mencionados (canteras, botaderos — cada uno con su tipo: LOAD si es un punto de cargue/cantera/'obra' " +
+      "mencionada asi, UNLOAD si es de descargue/botadero, BOTH si sirve para ambos, y su direccion tal como " +
+      "aparezca o se mencione).\n\n" +
+      "MUY IMPORTANTE sobre 'address' de cada punto: SIEMPRE debe incluir el nombre/referencia especifica del " +
+      "sitio, nunca solo la ciudad sola. Si el despachador NO dio una direccion formal (calle/carrera con " +
+      "numeros) y solo dio un nombre de lugar + ciudad (ej. 'Altos de Granada en Manizales'), pon en address ese " +
+      "mismo nombre + ciudad tal cual ('Altos de Granada, Manizales, Caldas, Colombia') — NO lo reduzcas solo a " +
+      "'Manizales, Caldas, Colombia', porque asi se pierde la referencia y el punto queda ubicado en el centro de " +
+      "la ciudad en vez del lugar real. La ciudad se usa para desambiguar, no para reemplazar el nombre del " +
+      "sitio.\n\n" +
+      "Reconoce estas ciudades principales de Colombia cuando se mencionen (o cualquier otra ciudad/municipio " +
+      "colombiano que se nombre explicitamente): Bogota, Medellin, Cali, Barranquilla, Manizales, " +
+      "Villavicencio — usa SIEMPRE la ciudad que efectivamente se menciono, nunca asumas Bogota si se dijo otra " +
+      "ciudad.\n\n" +
+      "3) las tarifas: cada combinacion de ruta (origen-destino), material y tipo/clase de vehiculo con " +
+      "su valor y tipo (PER_TRIP si es por viaje, PER_TON si es por tonelada, PER_CUBIC_METER si es por m3, " +
+      "PER_KILOMETER si es por kilometro, FIXED si es un valor fijo).\n\n" +
+      (input.existingMaterialNames && input.existingMaterialNames.length > 0
+        ? "MUY IMPORTANTE sobre materiales ya existentes: estos materiales ya estan registrados en el sistema: [" +
+          input.existingMaterialNames.join(", ") +
+          "]. Si el material que se menciona es el MISMO producto que uno de estos, aunque este dicho de forma " +
+          "distinta o mas/menos especifica (ej. 'excavacion' y 'excavacion de tierra' son el mismo material; " +
+          "'recebo' y 'recebo comun' tambien), usa el nombre EXACTO de la lista de arriba, no inventes una " +
+          "variante nueva. Solo usa un nombre nuevo si es un material genuinamente distinto que no esta en esa " +
+          "lista.\n\n"
+        : "") +
+      "MUY IMPORTANTE sobre tarifas multiples: puede haber MAS DE UNA tarifa para la misma ruta, incluso " +
+      "mencionadas juntas en una sola frase compacta — ej. 'el viaje de recebo comun sale a 270.000 o a veces " +
+      "B200 que sale a 320.000' tiene DOS tarifas distintas (una normal/sencilla a 270.000, y otra para vehiculo " +
+      "tipo B200/doble troque a 320.000), NO las combines ni te quedes solo con una — devuelve una fila en " +
+      "'rates' por cada valor distinto que se mencione, aunque compartan ruta y material. Si se menciona un tipo " +
+      "o clase de vehiculo/camion para una tarifa, mapealo a vehicleType asi: 'sencilla'/'volqueta sencilla' -> " +
+      "DUMP_TRUCK, 'doble troque'/'B-doble'/'B200'/'bitren' -> DOUBLE_TRAILER, 'mini'/'minivolqueta' -> " +
+      "MINI_DUMP_TRUCK, 'tractomula'/'cabezote' -> TRACTOR_TRAILER, cualquier otro tipo mencionado -> OTHER, y " +
+      "null si NO se menciona ningun tipo especifico para esa tarifa (aplica a cualquier vehiculo).\n\n" +
+      "Usa los NOMBRES de los puntos operativos para referenciar origen/destino de cada tarifa " +
+      "(originSiteName/destinationSiteName), deben coincidir exactamente con el nombre que le diste a ese punto " +
+      "en la lista de sites. Si un dato no aparece o no estas seguro, devuelve null en ese campo en vez de " +
+      "adivinar — es un borrador que el despachador revisa y corrige antes de guardar nada. Las fechas en " +
+      "formato ISO (YYYY-MM-DD) si son claras." +
+      (pastedText ? `\n\nTexto de la orden de trabajo:\n${pastedText}` : "") +
+      (input.imageBuffers.length > 0 ? "\n\nAdemas se adjuntan foto(s) del mismo documento." : "") +
+      (input.audioBuffer ? "\n\nAdemas se adjunta un audio donde se dicta/describe la obra de palabra." : "");
+
+    const mediaBuffers = input.audioBuffer ? [...input.imageBuffers, input.audioBuffer] : input.imageBuffers;
+    const vehicleTypeEnum = ["DUMP_TRUCK", "DOUBLE_TRAILER", "MINI_DUMP_TRUCK", "TRACTOR_TRAILER", "OTHER"];
+
+    return this.extractWithGemini(
+      mediaBuffers,
+      "operations-setup",
+      prompt,
+      {
+        type: Type.OBJECT,
+        properties: {
+          project: {
+            type: Type.OBJECT,
+            properties: {
+              clientName: stringField("Nombre del cliente"),
+              description: stringField("Descripcion breve, si aplica"),
+              startDate: stringField("Fecha de inicio, formato ISO YYYY-MM-DD si es clara"),
+              endDate: stringField("Fecha de fin, formato ISO YYYY-MM-DD si es clara"),
+            },
+            required: ["clientName", "description", "startDate", "endDate"],
+          },
+          sites: {
+            type: Type.ARRAY,
+            description: "Puntos operativos (cargue/descargue) mencionados, incluyendo lo que se haya dicho como 'obra: X'",
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                name: stringField("Nombre del punto operativo"),
+                type: { type: Type.STRING, nullable: true, enum: ["LOAD", "UNLOAD", "BOTH"], description: "Tipo de punto" },
+                address: stringField(
+                  "Direccion o ubicacion descrita — SIEMPRE incluye el nombre/referencia del sitio junto con la " +
+                    "ciudad (ej. 'Altos de Granada, Manizales, Caldas, Colombia'), nunca solo la ciudad sola",
+                ),
+              },
+              required: ["name", "type", "address"],
+            },
+          },
+          rates: {
+            type: Type.ARRAY,
+            description: "Tarifas por ruta+material+tipo de vehiculo — una fila por cada valor distinto mencionado, aunque compartan ruta",
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                originSiteName: stringField("Nombre del punto de origen, debe calzar con un nombre en 'sites'"),
+                destinationSiteName: stringField("Nombre del punto de destino, debe calzar con un nombre en 'sites'"),
+                materialName: stringField("Nombre del material transportado"),
+                rateType: {
+                  type: Type.STRING,
+                  nullable: true,
+                  enum: ["PER_TRIP", "PER_TON", "PER_CUBIC_METER", "PER_KILOMETER", "FIXED"],
+                  description: "Tipo de tarifa",
+                },
+                value: { type: Type.NUMBER, nullable: true, description: "Valor de la tarifa en pesos colombianos" },
+                vehicleType: {
+                  type: Type.STRING,
+                  nullable: true,
+                  enum: vehicleTypeEnum,
+                  description: "Tipo/clase de vehiculo de esta tarifa especifica, null si no se menciono ninguno",
+                },
+              },
+              required: ["originSiteName", "destinationSiteName", "materialName", "rateType", "value", "vehicleType"],
+            },
+          },
+        },
+        required: ["project", "sites", "rates"],
+      },
+      emptyExtraction,
+    );
+  }
+
+  // Convierte una descripcion coloquial de una ubicacion (ej. "la Caracas
+  // con 72", "frente al Exito de la 80") en 1-3 direcciones formales y
+  // completas, listas para buscar en un mapa — el despachador no siempre
+  // sabe la direccion "oficial" de un punto, pero si sabe como se le dice
+  // coloquialmente. OperationsService las usa despues como texto de
+  // busqueda contra Nominatim (OpenStreetMap) para conseguir coordenadas
+  // reales; Gemini nunca inventa coordenadas, solo normaliza el texto.
+  async resolveAddress(query: string): Promise<{ rawText: string; extraction: { addresses: string[] } }> {
+    const emptyExtraction = { addresses: [] as string[] };
+    const prompt =
+      "Convierte esta descripcion coloquial de una ubicacion en Colombia a direcciones formales y completas, " +
+      "listas para buscar en un mapa. Funciona para cualquier ciudad colombiana, no solo Bogota — reconoce " +
+      "explicitamente Bogota, Medellin, Cali, Barranquilla, Manizales, Villavicencio y cualquier otra ciudad/" +
+      "municipio que se mencione, y usa SIEMPRE la ciudad que el usuario efectivamente dijo. Solo si NO se " +
+      "menciona ninguna ciudad, asume Bogota D.C. como fallback — nunca la reemplaces por Bogota si se nombro " +
+      "otra ciudad. Incluye siempre la ciudad y 'Colombia' al final de cada direccion, y NUNCA reduzcas la " +
+      "direccion a solo el nombre de la ciudad — si la descripcion trae un nombre de lugar especifico (barrio, " +
+      "sitio, punto de referencia), consérvalo siempre junto con la ciudad.\n\n" +
+      "Si la ubicacion es en Bogota, aplica estas reglas de nomenclatura local antes de devolver la direccion:\n" +
+      "1. Jerarquia por defecto: si el usuario NO dice explicitamente la palabra 'sur', interpreta la interseccion " +
+      "como centro/norte (ej. 'Septima con 26' -> Carrera 7 con Calle 26, NO Calle 26 Sur). Solo usa 'Sur' si " +
+      "aparece esa palabra en la descripcion.\n" +
+      "2. Nombres informales de vias principales -> nomenclatura oficial:\n" +
+      "   'la Septima'/'la 7' -> Carrera 7\n" +
+      "   'la Caracas' -> Avenida Caracas (Carrera 14)\n" +
+      "   'la 26'/'la Dorado' -> Avenida Calle 26\n" +
+      "   'la Autopista Norte'/'la Auto Norte' -> Autopista Norte (Carrera 45)\n" +
+      "   'la NQS'/'la 30' -> Avenida NQS (Carrera 30)\n" +
+      "   'la Boyaca' -> Avenida Boyaca (Carrera 72)\n" +
+      "   'la 68' -> Avenida Carrera 68\n" +
+      "   'la 100' -> Avenida Calle 100\n" +
+      "   'la 80' -> Avenida Calle 80\n" +
+      "   'la Suba' -> Avenida Suba (Calle 145)\n" +
+      "3. Inferencia Calle vs Carrera: las vias de la lista anterior corren norte-sur (son Carreras/Avenidas), " +
+      "asi que en una expresion tipo '<via> con <numero>' (ej. 'la Caracas con 72'), el <numero> casi siempre es " +
+      "una Calle (via oriente-occidente) que cruza esa carrera — interpreta 'la Caracas con 72' como Carrera 14 " +
+      "con Calle 72, no como dos carreras.\n" +
+      "4. Si la descripcion sigue siendo ambigua incluso aplicando estas reglas (varias interpretaciones " +
+      "razonables), devuelve 2-3 variantes priorizando zonas de alto flujo comercial/urbano sobre zonas " +
+      "perifericas.\n\n" +
+      "Devuelve entre 1 y 3 variantes (de la mas a la menos probable) si la descripcion es ambigua, o solo 1 si " +
+      `es clara. No expliques nada, solo las direcciones.\n\nDescripcion: "${query}"`;
+
+    return this.extractWithGemini(
+      [],
+      "resolve-address",
+      prompt,
+      {
+        type: Type.OBJECT,
+        properties: {
+          addresses: {
+            type: Type.ARRAY,
+            description: "Direcciones formales candidatas, de la mas a la menos probable",
+            items: { type: Type.STRING },
+          },
+        },
+        required: ["addresses"],
+      },
+      emptyExtraction,
+    );
+  }
+
   // Convierte fechas en formato colombiano (DD-MM-YYYY o DD/MM/YYYY) a ISO
   // (YYYY-MM-DD). Si ya viene en ISO, o no calza con ningun formato
   // reconocido, se devuelve tal cual (mejor un dato crudo que uno inventado).
@@ -538,70 +830,4 @@ export class OcrService {
     return `${year}-${mm}-${dd}`;
   }
 
-  private extractQuantity(text: string): { quantity: number | null; unit: "TON" | "CUBIC_METER" | null } {
-    const patterns: Array<{ regex: RegExp; unit: "TON" | "CUBIC_METER" }> = [
-      { regex: /(?:volumen|cantidad)[:\s]*([\d.,]+)\s*m\s?3/i, unit: "CUBIC_METER" },
-      { regex: /([\d.,]+)\s*m\s?3\b/i, unit: "CUBIC_METER" },
-      { regex: /(?:volumen|cantidad)[:\s]*([\d.,]+)\s*(?:ton|tonelada)/i, unit: "TON" },
-      { regex: /([\d.,]+)\s*(?:ton|tonelada)/i, unit: "TON" },
-    ];
-
-    for (const { regex, unit } of patterns) {
-      const match = text.match(regex);
-      const raw = match?.[1];
-      if (raw) {
-        const value = this.parseNumber(raw);
-        if (value !== null && value > 0 && value < 1000) {
-          return { quantity: value, unit };
-        }
-      }
-    }
-    return { quantity: null, unit: null };
-  }
-
-  private extractVoucherNumber(text: string): string | null {
-    // Busca linea por linea para no "arrastrar" el valor de la siguiente
-    // linea cuando el campo del vale viene vacio (frecuente en estos recibos).
-    const line = text.split(/\r?\n/).find((l) => /no\.?\s?vale/i.test(l));
-    if (!line) {
-      return null;
-    }
-    const match = line.match(/no\.?\s?vale[:\s]*([A-Za-z0-9-]{2,})/i);
-    return match?.[1] ?? null;
-  }
-
-  // Lee linea por linea buscando el patron "Etiqueta: valor" y se queda
-  // solo con las etiquetas conocidas de este tipo de vale (evita capturar
-  // ruido del OCR como lineas sueltas o codigos de barras mal leidos).
-  private extractLabeledFields(text: string): Record<string, string> {
-    const result: Record<string, string> = {};
-
-    for (const line of text.split(/\r?\n/)) {
-      const match = line.match(/^\s*([A-Za-zÀ-ÿ.\s]{3,25}?)\s*:\s*(.+?)\s*$/);
-      if (!match) continue;
-
-      const [, rawLabel, rawValue] = match;
-      if (!rawLabel || !rawValue) continue;
-      const normalizedLabel = this.stripAccents(rawLabel.toLowerCase()).replace(/[^a-z]/g, "");
-      const displayLabel = KNOWN_LABELS[normalizedLabel];
-      const value = rawValue.trim();
-
-      if (displayLabel && value) {
-        result[displayLabel] = value;
-      }
-    }
-
-    return result;
-  }
-
-  private stripAccents(value: string): string {
-    return value.normalize("NFD").replace(/[̀-ͯ]/g, "");
-  }
-
-  private parseNumber(raw: string): number | null {
-    const cleaned = raw.trim();
-    const normalized = cleaned.replace(/,(\d{1,2})$/, "").replace(/[.,]/g, "");
-    const value = Number(normalized);
-    return Number.isFinite(value) && normalized.length > 0 ? value : null;
-  }
 }

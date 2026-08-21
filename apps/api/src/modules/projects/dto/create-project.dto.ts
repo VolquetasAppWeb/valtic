@@ -17,10 +17,10 @@ export class CreateProjectDto {
   @IsString()
   description?: string;
 
-  @ApiProperty({ example: "Alcaldia Municipal" })
+  @ApiProperty({ required: false, example: "Alcaldia Municipal" })
+  @IsOptional()
   @IsString()
-  @MinLength(2)
-  clientName!: string;
+  clientName?: string;
 
   @ApiProperty({ example: "2026-01-15" })
   @IsDateString()

@@ -1,23 +1,25 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Fragment, Suspense, useState } from "react";
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Copy, MapPin, Pencil, Plus, Power, PowerOff, QrCode } from "lucide-react";
+import { Copy, MapPin, Pencil, Plus, Power, PowerOff, QrCode, Trash2 } from "lucide-react";
 import { operationalSiteSchema, type OperationalSiteInput } from "@valtic/validation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/admin/status-badge";
+import { AddressSearch } from "@/components/admin/address-search";
 import { apiClient, ApiError } from "@/lib/api-client";
 import type { OperationalSite, PaginatedResult, Project } from "@/lib/api-types";
 
@@ -41,15 +43,22 @@ function OperationalSitesContent(): JSX.Element {
   const [qrResult, setQrResult] = useState<{ token: string; expiresAt: string } | null>(null);
   const [qrError, setQrError] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<OperationalSite | null>(null);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   function setProjectFilter(value: string): void {
     const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", "sitios");
     if (value) {
       params.set("projectId", value);
     } else {
       params.delete("projectId");
     }
-    router.replace(`/operational-sites${params.toString() ? `?${params.toString()}` : ""}`);
+    // Este componente ahora se renderiza dentro del modulo fusionado
+    // /operations (pestaña "sitios"), asi que el filtro debe quedarse ahi
+    // en vez de saltar a la ruta standalone /operational-sites.
+    router.replace(`/operations${params.toString() ? `?${params.toString()}` : ""}`);
   }
 
   const sitesParams = new URLSearchParams();
@@ -80,7 +89,7 @@ function OperationalSitesContent(): JSX.Element {
   function openCreate(): void {
     setEditing(null);
     setFormError(null);
-    reset({ projectId: projectIdFilter ?? "", name: "", type: "LOAD", address: "", latitude: 0, longitude: 0, geofenceRadius: 100 });
+    reset({ projectId: projectIdFilter ?? "", name: "", type: "LOAD", address: "", latitude: 0, longitude: 0, geofenceRadius: 50 });
     setDialogOpen(true);
   }
 
@@ -138,8 +147,27 @@ function OperationalSitesContent(): JSX.Element {
     qrMutation.mutate(site.id);
   }
 
+  const deleteMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      apiClient.delete<void>(`/operational-sites/${id}`, { body: reason ? { reason } : {} }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["operational-sites"] });
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      setDeleteTarget(null);
+      setDeleteReason("");
+      setDeleteError(null);
+    },
+    onError: (error: unknown) => {
+      setDeleteError(error instanceof ApiError ? error.response.message : "No se pudo eliminar el punto operativo.");
+    },
+  });
+
   const projects = projectsData?.data ?? [];
   const projectId = watch("projectId");
+  // El backend ya devuelve los puntos ordenados por obra y luego por
+  // nombre — aca solo se detecta cuando cambia la obra para insertar un
+  // encabezado de grupo, en vez de una lista plana dificil de escanear.
+  const sitesList = sites ?? [];
 
   return (
     <div className="space-y-6">
@@ -193,7 +221,7 @@ function OperationalSitesContent(): JSX.Element {
             <Skeleton className="h-10 w-full" />
             <Skeleton className="h-10 w-full" />
           </div>
-        ) : !sites || sites.length === 0 ? (
+        ) : sitesList.length === 0 ? (
           <div className="p-6">
             <EmptyState icon={MapPin} title="Sin puntos operativos" description="Crea el primer punto de cargue o descargue." />
           </div>
@@ -202,7 +230,6 @@ function OperationalSitesContent(): JSX.Element {
             <TableHeader>
               <TableRow>
                 <TableHead>Nombre</TableHead>
-                <TableHead>Obra</TableHead>
                 <TableHead>Tipo</TableHead>
                 <TableHead>Direccion</TableHead>
                 <TableHead>Radio geocerca</TableHead>
@@ -211,45 +238,69 @@ function OperationalSitesContent(): JSX.Element {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sites.map((site) => (
-                <TableRow key={site.id}>
-                  <TableCell className="font-medium">{site.name}</TableCell>
-                  <TableCell className="text-muted-foreground">{site.project?.name}</TableCell>
-                  <TableCell className="text-muted-foreground">{SITE_TYPE_LABEL[site.type]}</TableCell>
-                  <TableCell className="text-muted-foreground">{site.address}</TableCell>
-                  <TableCell className="text-muted-foreground">{site.geofenceRadius} m</TableCell>
-                  <TableCell>
-                    <StatusBadge status={site.status} />
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-1">
-                      {(site.type === "UNLOAD" || site.type === "BOTH") && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => openQrDialog(site)}
-                          aria-label="Generar QR de cierre"
-                        >
-                          <QrCode className="h-4 w-4" />
-                        </Button>
-                      )}
-                      <Button variant="ghost" size="icon" onClick={() => openEdit(site)} aria-label="Editar">
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label={site.status === "ACTIVE" ? "Desactivar" : "Activar"}
-                        onClick={() =>
-                          statusMutation.mutate({ id: site.id, status: site.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" })
-                        }
-                      >
-                        {site.status === "ACTIVE" ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {sitesList.map((site, index) => {
+                const previousProjectId = sitesList[index - 1]?.project?.id;
+                const showGroupHeader = site.project?.id !== previousProjectId;
+                return (
+                  <Fragment key={site.id}>
+                    {showGroupHeader && (
+                      <TableRow className="bg-secondary/30 hover:bg-secondary/30">
+                        <TableCell colSpan={6} className="py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          {site.project?.name ?? "Sin obra"}
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    <TableRow key={site.id}>
+                      <TableCell className="font-medium">{site.name}</TableCell>
+                      <TableCell className="text-muted-foreground">{SITE_TYPE_LABEL[site.type]}</TableCell>
+                      <TableCell className="text-muted-foreground">{site.address}</TableCell>
+                      <TableCell className="text-muted-foreground">{site.geofenceRadius} m</TableCell>
+                      <TableCell>
+                        <StatusBadge status={site.status} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          {(site.type === "UNLOAD" || site.type === "BOTH") && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => openQrDialog(site)}
+                              aria-label="Generar QR de cierre"
+                            >
+                              <QrCode className="h-4 w-4" />
+                            </Button>
+                          )}
+                          <Button variant="ghost" size="icon" onClick={() => openEdit(site)} aria-label="Editar">
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label={site.status === "ACTIVE" ? "Desactivar" : "Activar"}
+                            onClick={() =>
+                              statusMutation.mutate({ id: site.id, status: site.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" })
+                            }
+                          >
+                            {site.status === "ACTIVE" ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label="Eliminar"
+                            onClick={() => {
+                              setDeleteTarget(site);
+                              setDeleteReason("");
+                              setDeleteError(null);
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  </Fragment>
+                );
+              })}
             </TableBody>
           </Table>
         )}
@@ -324,12 +375,21 @@ function OperationalSitesContent(): JSX.Element {
             </div>
             <div className="space-y-1.5">
               <Label>Ubicacion en el mapa</Label>
+              <AddressSearch
+                placeholder="Escribe la direccion para ubicarla automaticamente..."
+                onSelect={(result) => {
+                  setValue("latitude", Number(result.lat.toFixed(6)));
+                  setValue("longitude", Number(result.lon.toFixed(6)));
+                  if (!watch("address")) setValue("address", result.displayName);
+                }}
+              />
               <div className="h-64 w-full overflow-hidden rounded-md border border-border">
                 {dialogOpen && (
                   <SiteMapPicker
                     latitude={Number(watch("latitude")) || 0}
                     longitude={Number(watch("longitude")) || 0}
-                    radius={Number(watch("geofenceRadius")) || 100}
+                    radius={Number(watch("geofenceRadius")) || 50}
+                    label={watch("name") || "Nuevo punto"}
                     onChange={(lat, lng) => {
                       setValue("latitude", Number(lat.toFixed(6)));
                       setValue("longitude", Number(lng.toFixed(6)));
@@ -381,6 +441,40 @@ function OperationalSitesContent(): JSX.Element {
                 </div>
               </>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Eliminar punto operativo</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Vas a eliminar el punto <span className="font-medium text-foreground">{deleteTarget?.name}</span>. La
+              obra y sus demas puntos/tarifas no se ven afectados. Se bloquea si tiene viajes en curso.
+            </p>
+            <div className="space-y-1.5">
+              <Label htmlFor="site-delete-reason">Motivo (opcional)</Label>
+              <Textarea
+                id="site-delete-reason"
+                rows={2}
+                value={deleteReason}
+                onChange={(e) => setDeleteReason(e.target.value)}
+                placeholder="Por que se elimina este punto..."
+              />
+            </div>
+            {deleteError && <p className="text-sm text-destructive">{deleteError}</p>}
+            <DialogFooter>
+              <Button
+                variant="destructive"
+                disabled={deleteMutation.isPending}
+                onClick={() => deleteTarget && deleteMutation.mutate({ id: deleteTarget.id, reason: deleteReason })}
+              >
+                {deleteMutation.isPending ? "Eliminando..." : "Eliminar punto"}
+              </Button>
+            </DialogFooter>
           </div>
         </DialogContent>
       </Dialog>

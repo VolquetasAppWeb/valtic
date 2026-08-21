@@ -33,6 +33,15 @@ export class MaterialsController {
     return this.materialsService.findAll(tenantId, query);
   }
 
+  // Declarado antes de ":id" por el mismo motivo que en otros controllers
+  // (si no, "most-used" se interpretaria como un id).
+  @Get("most-used")
+  @Permissions(PERMISSIONS.MATERIALS_MANAGE, PERMISSIONS.MATERIALS_READ)
+  @ApiOperation({ summary: "Materiales mas usados (por cantidad de tarifas configuradas), para el selector rapido al crear un viaje" })
+  findMostUsed(@Query("limit") limit: string | undefined, @TenantId() tenantId: string) {
+    return this.materialsService.findMostUsed(tenantId, limit ? Math.min(Number(limit) || 10, 50) : 10);
+  }
+
   @Get(":id")
   @Permissions(PERMISSIONS.MATERIALS_MANAGE, PERMISSIONS.MATERIALS_READ)
   @ApiOperation({ summary: "Consulta un material" })

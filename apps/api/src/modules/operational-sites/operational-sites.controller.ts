@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { PERMISSIONS } from "@valtic/types";
 import { Permissions } from "../../common/decorators/permissions.decorator";
@@ -10,6 +10,7 @@ import { TenantScopeGuard } from "../auth/guards/tenant-scope.guard";
 import { OperationalSitesService } from "./operational-sites.service";
 import { CreateOperationalSiteDto } from "./dto/create-operational-site.dto";
 import { UpdateOperationalSiteDto } from "./dto/update-operational-site.dto";
+import { DeleteOperationalSiteDto } from "./dto/delete-operational-site.dto";
 
 @ApiTags("operational-sites")
 @ApiBearerAuth()
@@ -66,5 +67,18 @@ export class OperationalSitesController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.sitesService.updateStatus(tenantId, id, dto.status, user);
+  }
+
+  @Delete(":id")
+  @HttpCode(204)
+  @Permissions(PERMISSIONS.SITES_MANAGE)
+  @ApiOperation({ summary: "Elimina (soft-delete) un punto operativo; bloqueado si tiene viajes en curso. No afecta a la obra." })
+  remove(
+    @Param("id") id: string,
+    @Body() dto: DeleteOperationalSiteDto,
+    @TenantId() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.sitesService.remove(tenantId, id, dto.reason, user);
   }
 }

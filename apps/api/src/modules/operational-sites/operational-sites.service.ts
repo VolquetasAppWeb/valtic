@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { isDispatcherScoped } from "../../common/dispatcher-scope";
+import { IN_PROGRESS_STATUSES } from "../trips/domain/trip-state-machine";
 import type { AuthenticatedUser } from "../../common/types/authenticated-user";
 import type { CreateOperationalSiteDto } from "./dto/create-operational-site.dto";
 import type { UpdateOperationalSiteDto } from "./dto/update-operational-site.dto";
@@ -39,11 +40,12 @@ export class OperationalSitesService {
     return this.prisma.operationalSite.findMany({
       where: {
         tenantId,
+        deletedAt: null,
         ...(projectId ? { projectId } : {}),
         ...(type ? { type } : {}),
         ...(isDispatcherScoped(actor) ? { project: { dispatcherId: actor.sub } } : {}),
       },
-      orderBy: { name: "asc" },
+      orderBy: [{ project: { name: "asc" } }, { name: "asc" }],
       include: { project: { select: { id: true, name: true } } },
     });
   }
@@ -53,6 +55,7 @@ export class OperationalSitesService {
       where: {
         id,
         tenantId,
+        deletedAt: null,
         ...(isDispatcherScoped(actor) ? { project: { dispatcherId: actor.sub } } : {}),
       },
       include: { project: { select: { id: true, name: true } } },
@@ -100,11 +103,49 @@ export class OperationalSitesService {
     return updated;
   }
 
+  // El DISPATCHER elimina (soft-delete) solo sus propios puntos operativos;
+  // nunca se borra la fila — queda excluida de las consultas normales
+  // (deletedAt: null). Eliminar un punto NO afecta a la obra ni a sus otros
+  // puntos/tarifas (a diferencia de eliminar la obra, que si arrastra todo
+  // — ver ProjectsService.remove). Bloqueado si tiene viajes en curso.
+  async remove(tenantId: string, id: string, reason: string | undefined, actor: AuthenticatedUser) {
+    const site = await this.assertExists(tenantId, id, actor);
+
+    const activeTrips = await this.prisma.trip.count({
+      where: {
+        status: { in: IN_PROGRESS_STATUSES },
+        OR: [{ originSiteId: id }, { destinationSiteId: id }],
+      },
+    });
+    if (activeTrips > 0) {
+      throw new ConflictException({
+        code: "SITE_HAS_ACTIVE_TRIPS",
+        message: "No se puede eliminar un punto operativo con viajes en curso.",
+      });
+    }
+
+    await this.prisma.operationalSite.update({
+      where: { id },
+      data: { deletedAt: new Date(), deletedById: actor.sub, deleteReason: reason, status: "INACTIVE" },
+    });
+
+    await this.auditService.record({
+      tenantId,
+      actorUserId: actor.sub,
+      action: "OPERATIONAL_SITE_DELETED",
+      entityType: "OperationalSite",
+      entityId: id,
+      reason,
+      oldValue: { name: site.name, type: site.type },
+    });
+  }
+
   private async assertExists(tenantId: string, id: string, actor: AuthenticatedUser) {
     const site = await this.prisma.operationalSite.findFirst({
       where: {
         id,
         tenantId,
+        deletedAt: null,
         ...(isDispatcherScoped(actor) ? { project: { dispatcherId: actor.sub } } : {}),
       },
     });
@@ -119,6 +160,7 @@ export class OperationalSitesService {
       where: {
         id: projectId,
         tenantId,
+        deletedAt: null,
         ...(isDispatcherScoped(actor) ? { dispatcherId: actor.sub } : {}),
       },
     });

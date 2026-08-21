@@ -23,6 +23,7 @@ import { ProjectsModule } from "./modules/projects/projects.module";
 import { OperationalSitesModule } from "./modules/operational-sites/operational-sites.module";
 import { MaterialsModule } from "./modules/materials/materials.module";
 import { RatesModule } from "./modules/rates/rates.module";
+import { OperationsModule } from "./modules/operations/operations.module";
 import { TripEventsModule } from "./modules/trip-events/trip-events.module";
 import { TripsModule } from "./modules/trips/trips.module";
 import { LocationsModule } from "./modules/locations/locations.module";
@@ -66,6 +67,7 @@ import { ReportsModule } from "./modules/reports/reports.module";
     OperationalSitesModule,
     MaterialsModule,
     RatesModule,
+    OperationsModule,
     TripEventsModule,
     TripsModule,
     LocationsModule,

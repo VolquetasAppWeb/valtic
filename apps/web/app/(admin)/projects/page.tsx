@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { HardHat, MapPin, Pencil, Plus } from "lucide-react";
+import { HardHat, MapPin, Pencil, Trash2 } from "lucide-react";
 import { projectSchema, type ProjectInput } from "@valtic/validation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -28,6 +28,9 @@ export default function ProjectsPage(): JSX.Element {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Project | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
@@ -50,13 +53,6 @@ export default function ProjectsPage(): JSX.Element {
     formState: { errors },
   } = useForm<ProjectInput>({ resolver: zodResolver(projectSchema) });
 
-  function openCreate(): void {
-    setEditing(null);
-    setFormError(null);
-    reset({ name: "", code: "", description: "", clientName: "", startDate: "", endDate: "" });
-    setDialogOpen(true);
-  }
-
   function openEdit(project: Project): void {
     setEditing(project);
     setFormError(null);
@@ -64,7 +60,7 @@ export default function ProjectsPage(): JSX.Element {
       name: project.name,
       code: project.code,
       description: project.description ?? "",
-      clientName: project.clientName,
+      clientName: project.clientName ?? "",
       startDate: project.startDate.slice(0, 10),
       endDate: project.endDate?.slice(0, 10) ?? "",
     });
@@ -74,9 +70,7 @@ export default function ProjectsPage(): JSX.Element {
   const saveMutation = useMutation({
     mutationFn: (values: ProjectInput) => {
       const payload = { ...values, description: values.description || undefined, endDate: values.endDate || undefined };
-      return editing
-        ? apiClient.patch<Project>(`/projects/${editing.id}`, payload)
-        : apiClient.post<Project>("/projects", payload);
+      return apiClient.patch<Project>(`/projects/${editing!.id}`, payload);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
@@ -93,19 +87,29 @@ export default function ProjectsPage(): JSX.Element {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["projects"] }),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      apiClient.delete<void>(`/projects/${id}`, { body: reason ? { reason } : {} }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["operational-sites"] });
+      queryClient.invalidateQueries({ queryKey: ["rates"] });
+      setDeleteTarget(null);
+      setDeleteReason("");
+      setDeleteError(null);
+    },
+    onError: (error: unknown) => {
+      setDeleteError(error instanceof ApiError ? error.response.message : "No se pudo eliminar la obra.");
+    },
+  });
+
   const projects = data?.data ?? [];
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Obras</h1>
-          <p className="text-sm text-muted-foreground">Proyectos u obras donde se ejecutan los viajes.</p>
-        </div>
-        <Button onClick={openCreate}>
-          <Plus className="h-4 w-4" />
-          Nueva obra
-        </Button>
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">Obras</h1>
+        <p className="text-sm text-muted-foreground">Proyectos u obras donde se ejecutan los viajes.</p>
       </div>
 
       <div className="flex flex-wrap items-end gap-4">
@@ -168,7 +172,7 @@ export default function ProjectsPage(): JSX.Element {
                 <TableRow key={project.id}>
                   <TableCell className="font-medium">{project.name}</TableCell>
                   <TableCell className="text-muted-foreground">{project.code}</TableCell>
-                  <TableCell className="text-muted-foreground">{project.clientName}</TableCell>
+                  <TableCell className="text-muted-foreground">{project.clientName || "—"}</TableCell>
                   <TableCell className="text-muted-foreground">{project._count?.operationalSites ?? 0}</TableCell>
                   <TableCell>
                     <Select
@@ -192,12 +196,24 @@ export default function ProjectsPage(): JSX.Element {
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" asChild aria-label="Puntos operativos">
-                        <Link href={`/operational-sites?projectId=${project.id}`}>
+                        <Link href={`/operations?tab=sitios&projectId=${project.id}`}>
                           <MapPin className="h-4 w-4" />
                         </Link>
                       </Button>
                       <Button variant="ghost" size="icon" onClick={() => openEdit(project)} aria-label="Editar">
                         <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Eliminar"
+                        onClick={() => {
+                          setDeleteTarget(project);
+                          setDeleteReason("");
+                          setDeleteError(null);
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>
                   </TableCell>
@@ -227,7 +243,7 @@ export default function ProjectsPage(): JSX.Element {
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="clientName">Cliente</Label>
+              <Label htmlFor="clientName">Cliente (opcional)</Label>
               <Input id="clientName" {...register("clientName")} />
               {errors.clientName && <p className="text-xs text-destructive">{errors.clientName.message}</p>}
             </div>
@@ -253,6 +269,40 @@ export default function ProjectsPage(): JSX.Element {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Eliminar obra</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Vas a eliminar la obra <span className="font-medium text-foreground">{deleteTarget?.name}</span>. Sus
+              puntos operativos y tarifas tambien se eliminaran. Se bloquea si tiene viajes en curso.
+            </p>
+            <div className="space-y-1.5">
+              <Label htmlFor="project-delete-reason">Motivo (opcional)</Label>
+              <Textarea
+                id="project-delete-reason"
+                rows={2}
+                value={deleteReason}
+                onChange={(e) => setDeleteReason(e.target.value)}
+                placeholder="Por que se elimina esta obra..."
+              />
+            </div>
+            {deleteError && <p className="text-sm text-destructive">{deleteError}</p>}
+            <DialogFooter>
+              <Button
+                variant="destructive"
+                disabled={deleteMutation.isPending}
+                onClick={() => deleteTarget && deleteMutation.mutate({ id: deleteTarget.id, reason: deleteReason })}
+              >
+                {deleteMutation.isPending ? "Eliminando..." : "Eliminar obra"}
+              </Button>
+            </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

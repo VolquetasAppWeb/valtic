@@ -90,7 +90,7 @@ export default function DriverTripDetailPage(): JSX.Element {
 
   const qrMutation = useMutation({
     mutationFn: async () => {
-      const position = await getCurrentPosition().catch(() => null);
+      const position = gps.lastPosition ?? (await getCurrentPosition().catch(() => null));
       const result = await apiClient.post<QrValidateResponse>("/qr/validate", {
         token: confirmationCode,
         tripId: trip!.id,
@@ -134,7 +134,7 @@ export default function DriverTripDetailPage(): JSX.Element {
 
   const incidentMutation = useMutation({
     mutationFn: async () => {
-      const position = await getCurrentPosition().catch(() => null);
+      const position = gps.lastPosition ?? (await getCurrentPosition().catch(() => null));
       const incident = await apiClient.post<Incident>("/incidents", {
         tripId: trip!.id,
         type: incidentType,
@@ -183,7 +183,7 @@ export default function DriverTripDetailPage(): JSX.Element {
     if (!mainAction) return;
     setIsSubmitting(true);
     try {
-      await queueDriverAction(trip!.id, mainAction.action);
+      await queueDriverAction(trip!.id, mainAction.action, gps.lastPosition);
     } finally {
       setIsSubmitting(false);
     }

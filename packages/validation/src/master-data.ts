@@ -61,7 +61,7 @@ export const projectSchema = z.object({
   name: z.string().min(2, "Minimo 2 caracteres"),
   code: z.string().min(1, "Requerido"),
   description: z.string().optional().or(z.literal("")),
-  clientName: z.string().min(2, "Minimo 2 caracteres"),
+  clientName: z.string().optional().or(z.literal("")),
   startDate: z.string().min(1, "Requerido"),
   endDate: z.string().optional().or(z.literal("")),
 });

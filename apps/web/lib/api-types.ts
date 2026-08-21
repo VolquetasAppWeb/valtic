@@ -217,7 +217,7 @@ export interface Project {
   name: string;
   code: string;
   description: string | null;
-  clientName: string;
+  clientName: string | null;
   status: "PLANNED" | "ACTIVE" | "PAUSED" | "CLOSED";
   startDate: string;
   endDate: string | null;
@@ -257,6 +257,29 @@ export interface Rate {
   fleetOwner?: { id: string; name: string } | null;
   dispatcherId: string | null;
   dispatcher?: { id: string; firstName: string; lastName: string } | null;
+}
+
+// Borrador de "Obra + Puntos operativos + Tarifas" leido por IA de una
+// orden de trabajo/cotizacion — se revisa/edita en pantalla antes de crear
+// nada (ver POST /operations/extract-setup y /operations/quick-setup).
+export interface OperationsSetupDraft {
+  // Sin name/code: la obra no tiene nombre propio en este flujo — se
+  // genera del lado del cliente a partir de los puntos de cargue/descargue.
+  project: {
+    clientName: string | null;
+    description: string | null;
+    startDate: string | null;
+    endDate: string | null;
+  };
+  sites: Array<{ name: string | null; type: "LOAD" | "UNLOAD" | "BOTH" | null; address: string | null }>;
+  rates: Array<{
+    originSiteName: string | null;
+    destinationSiteName: string | null;
+    materialName: string | null;
+    rateType: "PER_TRIP" | "PER_TON" | "PER_CUBIC_METER" | "PER_KILOMETER" | "FIXED" | null;
+    value: number | null;
+    vehicleType: "DUMP_TRUCK" | "DOUBLE_TRAILER" | "MINI_DUMP_TRUCK" | "TRACTOR_TRAILER" | "OTHER" | null;
+  }>;
 }
 
 export type TripStatus =

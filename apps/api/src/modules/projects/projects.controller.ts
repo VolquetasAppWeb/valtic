@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { PERMISSIONS } from "@valtic/types";
 import { Permissions } from "../../common/decorators/permissions.decorator";
@@ -11,6 +11,7 @@ import { CreateProjectDto } from "./dto/create-project.dto";
 import { UpdateProjectDto } from "./dto/update-project.dto";
 import { UpdateProjectStatusDto } from "./dto/update-project-status.dto";
 import { ProjectQueryDto } from "./dto/project-query.dto";
+import { DeleteProjectDto } from "./dto/delete-project.dto";
 
 @ApiTags("projects")
 @ApiBearerAuth()
@@ -62,5 +63,21 @@ export class ProjectsController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.projectsService.updateStatus(tenantId, id, dto.status, user);
+  }
+
+  @Delete(":id")
+  @HttpCode(204)
+  @Permissions(PERMISSIONS.PROJECTS_MANAGE)
+  @ApiOperation({
+    summary:
+      "Elimina (soft-delete) una obra junto con sus puntos operativos y tarifas; bloqueado si tiene viajes en curso",
+  })
+  remove(
+    @Param("id") id: string,
+    @Body() dto: DeleteProjectDto,
+    @TenantId() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.projectsService.remove(tenantId, id, dto.reason, user);
   }
 }

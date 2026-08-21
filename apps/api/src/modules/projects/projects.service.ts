@@ -3,6 +3,7 @@ import { PrismaService } from "../../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { toPaginatedResponse } from "../../common/pagination";
 import { isDispatcherScoped } from "../../common/dispatcher-scope";
+import { IN_PROGRESS_STATUSES } from "../trips/domain/trip-state-machine";
 import type { AuthenticatedUser } from "../../common/types/authenticated-user";
 import type { CreateProjectDto } from "./dto/create-project.dto";
 import type { UpdateProjectDto } from "./dto/update-project.dto";
@@ -16,7 +17,7 @@ export class ProjectsService {
   ) {}
 
   async create(tenantId: string, dto: CreateProjectDto, actor: AuthenticatedUser) {
-    const existing = await this.prisma.project.findFirst({ where: { tenantId, code: dto.code } });
+    const existing = await this.prisma.project.findFirst({ where: { tenantId, code: dto.code, deletedAt: null } });
     if (existing) {
       throw new ConflictException({ code: "PROJECT_CODE_TAKEN", message: "Ya existe una obra con ese codigo." });
     }
@@ -47,6 +48,7 @@ export class ProjectsService {
   async findAll(tenantId: string, query: ProjectQueryDto, actor: AuthenticatedUser) {
     const where = {
       tenantId,
+      deletedAt: null,
       ...(isDispatcherScoped(actor) ? { dispatcherId: actor.sub } : {}),
       ...(query.status ? { status: query.status } : {}),
       ...(query.search
@@ -76,8 +78,8 @@ export class ProjectsService {
 
   async findById(tenantId: string, id: string, actor: AuthenticatedUser) {
     const project = await this.prisma.project.findFirst({
-      where: { id, tenantId, ...(isDispatcherScoped(actor) ? { dispatcherId: actor.sub } : {}) },
-      include: { operationalSites: true },
+      where: { id, tenantId, deletedAt: null, ...(isDispatcherScoped(actor) ? { dispatcherId: actor.sub } : {}) },
+      include: { operationalSites: { where: { deletedAt: null } } },
     });
     if (!project) {
       throw new NotFoundException({ code: "PROJECT_NOT_FOUND", message: "Obra no encontrada." });
@@ -127,9 +129,54 @@ export class ProjectsService {
     return updated;
   }
 
+  // Elimina (soft-delete) la obra y, en cascada a nivel de aplicacion, sus
+  // puntos operativos y tarifas — nunca se borran las filas fisicamente
+  // (quedan excluidas de las consultas normales via deletedAt: null), para
+  // no romper el historial de viajes que las referencian. Bloqueado si hay
+  // viajes en curso bajo esta obra.
+  async remove(tenantId: string, id: string, reason: string | undefined, actor: AuthenticatedUser) {
+    const project = await this.assertExists(tenantId, id, actor);
+
+    const activeTrips = await this.prisma.trip.count({
+      where: { projectId: id, status: { in: IN_PROGRESS_STATUSES } },
+    });
+    if (activeTrips > 0) {
+      throw new ConflictException({
+        code: "PROJECT_HAS_ACTIVE_TRIPS",
+        message: "No se puede eliminar una obra con viajes en curso.",
+      });
+    }
+
+    const now = new Date();
+    await this.prisma.$transaction([
+      this.prisma.operationalSite.updateMany({
+        where: { projectId: id, deletedAt: null },
+        data: { deletedAt: now, deletedById: actor.sub, deleteReason: "Obra eliminada" },
+      }),
+      this.prisma.rate.updateMany({
+        where: { projectId: id, deletedAt: null },
+        data: { deletedAt: now, deletedById: actor.sub, deleteReason: "Obra eliminada" },
+      }),
+      this.prisma.project.update({
+        where: { id },
+        data: { deletedAt: now, deletedById: actor.sub, deleteReason: reason },
+      }),
+    ]);
+
+    await this.auditService.record({
+      tenantId,
+      actorUserId: actor.sub,
+      action: "PROJECT_DELETED",
+      entityType: "Project",
+      entityId: id,
+      reason,
+      oldValue: { name: project.name, code: project.code },
+    });
+  }
+
   private async assertExists(tenantId: string, id: string, actor: AuthenticatedUser) {
     const project = await this.prisma.project.findFirst({
-      where: { id, tenantId, ...(isDispatcherScoped(actor) ? { dispatcherId: actor.sub } : {}) },
+      where: { id, tenantId, deletedAt: null, ...(isDispatcherScoped(actor) ? { dispatcherId: actor.sub } : {}) },
     });
     if (!project) {
       throw new NotFoundException({ code: "PROJECT_NOT_FOUND", message: "Obra no encontrada." });

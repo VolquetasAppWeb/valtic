@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { PERMISSIONS } from "@valtic/types";
 import { Permissions } from "../../common/decorators/permissions.decorator";
@@ -9,6 +9,7 @@ import { TenantScopeGuard } from "../auth/guards/tenant-scope.guard";
 import { RatesService } from "./rates.service";
 import { CreateRateDto } from "./dto/create-rate.dto";
 import { UpdateRateStatusDto } from "./dto/update-rate-status.dto";
+import { DeleteRateDto } from "./dto/delete-rate.dto";
 
 @ApiTags("rates")
 @ApiBearerAuth()
@@ -55,5 +56,18 @@ export class RatesController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.ratesService.updateStatus(tenantId, id, dto.status, user);
+  }
+
+  @Delete(":id")
+  @HttpCode(204)
+  @Permissions(PERMISSIONS.RATES_MANAGE)
+  @ApiOperation({ summary: "Elimina (soft-delete) una tarifa; bloqueado si tiene viajes en curso. No afecta a la obra ni a los puntos." })
+  remove(
+    @Param("id") id: string,
+    @Body() dto: DeleteRateDto,
+    @TenantId() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.ratesService.remove(tenantId, id, dto.reason, user);
   }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
@@ -18,7 +18,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { apiClient, ApiError } from "@/lib/api-client";
-import type { Driver, OperationalSite, PaginatedResult, Project, Trip, Vehicle } from "@/lib/api-types";
+import type { Driver, OperationalSite, PaginatedResult, Project, Rate, Trip, Vehicle } from "@/lib/api-types";
 
 const TRIP_STATUS_LABEL: Record<string, string> = {
   DRAFT: "Borrador",
@@ -77,11 +77,13 @@ export default function TripsPage(): JSX.Element {
     queryKey: ["vehicles", "for-select"],
     queryFn: () => apiClient.get<PaginatedResult<Vehicle>>("/vehicles?pageSize=100"),
   });
-  const { data: materialsData } = useQuery({
-    queryKey: ["materials", "for-select"],
-    queryFn: () => apiClient.get<PaginatedResult<{ id: string; name: string; status: string }>>("/materials?pageSize=100"),
+  // Lista de respaldo/atajo: los 10 materiales que mas se usan en el
+  // tenant, para poder elegir uno distinto al que ya trae la ruta sin
+  // tener que ir a buscarlo en otro lado.
+  const { data: mostUsedMaterialsData } = useQuery({
+    queryKey: ["materials", "most-used"],
+    queryFn: () => apiClient.get<Array<{ id: string; name: string }>>("/materials/most-used?limit=10"),
   });
-
   const {
     register,
     handleSubmit,
@@ -123,10 +125,64 @@ export default function TripsPage(): JSX.Element {
   const allVehicles = vehiclesData?.data ?? [];
   const drivers = allDrivers.filter((d) => d.status === "ACTIVE");
   const vehicles = allVehicles.filter((v) => v.status === "ACTIVE");
-  const materials = (materialsData?.data ?? []).filter((m) => m.status === "ACTIVE");
 
   const selectedProjectId = watch("projectId");
+  const selectedOriginId = watch("originSiteId");
+  const selectedDestinationId = watch("destinationSiteId");
   const sitesForProject = sites.filter((site) => site.projectId === selectedProjectId);
+  const loadSitesForProject = sitesForProject.filter((s) => s.type === "LOAD" || s.type === "BOTH");
+  const unloadSitesForProject = sitesForProject.filter((s) => s.type === "UNLOAD" || s.type === "BOTH");
+
+  // En cuanto se elige la obra, si hay un solo punto de cargue y uno de
+  // descargue (el caso normal: cada obra tiene su propia ruta), se
+  // auto-selecciona la ruta — el despachador no tiene que elegirla a mano
+  // cada vez.
+  useEffect(() => {
+    if (!selectedProjectId) return;
+    if (loadSitesForProject.length === 1) setValue("originSiteId", loadSitesForProject[0]!.id);
+    if (unloadSitesForProject.length === 1) setValue("destinationSiteId", unloadSitesForProject[0]!.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProjectId]);
+
+  // Las tarifas configuradas para la ruta elegida son la fuente real de
+  // verdad de que materiales se pueden transportar ahi — mostrar solo esos
+  // en vez de todos los materiales del tenant evita elegir una combinacion
+  // que despues el backend va a rechazar por no tener tarifa.
+  const { data: rateOptionsData } = useQuery({
+    queryKey: ["rates", "for-trip", selectedProjectId, selectedOriginId, selectedDestinationId],
+    queryFn: () =>
+      apiClient.get<Rate[]>(
+        `/rates?projectId=${selectedProjectId}&originSiteId=${selectedOriginId}&destinationSiteId=${selectedDestinationId}`,
+      ),
+    enabled: !!selectedProjectId && !!selectedOriginId && !!selectedDestinationId,
+  });
+  const now = Date.now();
+  const activeRatesForRoute = (rateOptionsData ?? []).filter(
+    (r) => r.status === "ACTIVE" && new Date(r.validFrom).getTime() <= now && (!r.validUntil || new Date(r.validUntil).getTime() >= now),
+  );
+  const materialsForRoute = Array.from(
+    new Map(activeRatesForRoute.filter((r) => r.material).map((r) => [r.material!.id, r.material!])).values(),
+  );
+  const routeSelected = !!selectedOriginId && !!selectedDestinationId;
+  const routeMaterialIds = new Set(materialsForRoute.map((m) => m.id));
+  // El material que ya tiene tarifa en esta ruta va primero (por defecto);
+  // los mas usados del tenant se agregan despues para poder cambiar de
+  // material sin salir del formulario, sin perder la ruta que ya se eligio.
+  const materialOptions = [...materialsForRoute, ...(mostUsedMaterialsData ?? []).filter((m) => !routeMaterialIds.has(m.id))];
+  const selectedMaterialId = watch("materialId");
+  const selectedMaterialHasRoute = !selectedMaterialId || routeMaterialIds.has(selectedMaterialId);
+  const soleRouteMaterialId = materialsForRoute.length === 1 ? materialsForRoute[0]!.id : null;
+
+  // Al elegir la ruta, si tiene un solo material configurado se selecciona
+  // solo (el caso normal); si tiene varios o ninguno, se limpia para que
+  // el despachador elija a mano en vez de dejar algo puesto por error.
+  // Depende de `soleRouteMaterialId` (no del arreglo completo) para que
+  // vuelva a correr cuando las tarifas de la ruta terminen de cargar, sin
+  // dispararse en cada render por tener un arreglo nuevo cada vez.
+  useEffect(() => {
+    setValue("materialId", soleRouteMaterialId ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedOriginId, selectedDestinationId, soleRouteMaterialId]);
 
   return (
     <div className="space-y-6">
@@ -327,19 +383,52 @@ export default function TripsPage(): JSX.Element {
 
             <div className="space-y-1.5">
               <Label>Material</Label>
-              <Select value={watch("materialId")} onValueChange={(value) => setValue("materialId", value)}>
+              <Select
+                value={selectedMaterialId}
+                onValueChange={(value) => setValue("materialId", value)}
+                disabled={!routeSelected || materialOptions.length === 0}
+              >
                 <SelectTrigger>
-                  <SelectValue placeholder="Selecciona un material" />
+                  <SelectValue placeholder={routeSelected ? "Selecciona un material" : "Primero elige la ruta"} />
                 </SelectTrigger>
                 <SelectContent>
-                  {materials.map((material) => (
-                    <SelectItem key={material.id} value={material.id}>
-                      {material.name}
-                    </SelectItem>
-                  ))}
+                  {materialsForRoute.length > 0 && (
+                    <>
+                      {materialsForRoute.map((material) => (
+                        <SelectItem key={material.id} value={material.id}>
+                          {material.name} · configurado para esta ruta
+                        </SelectItem>
+                      ))}
+                    </>
+                  )}
+                  {materialOptions
+                    .filter((m) => !routeMaterialIds.has(m.id))
+                    .map((material) => (
+                      <SelectItem key={material.id} value={material.id}>
+                        {material.name}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
               {errors.materialId && <p className="text-xs text-destructive">{errors.materialId.message}</p>}
+              {routeSelected && selectedMaterialId && !selectedMaterialHasRoute && (
+                <p className="text-xs text-warning">
+                  Esta ruta todavia no tiene tarifa configurada para este material.{" "}
+                  <Link href={`/operations?tab=tarifas&projectId=${selectedProjectId}`} className="underline">
+                    Agrega una tarifa
+                  </Link>{" "}
+                  antes de crear el viaje.
+                </p>
+              )}
+              {routeSelected && materialOptions.length === 0 && (
+                <p className="text-xs text-warning">
+                  No hay materiales configurados todavia.{" "}
+                  <Link href={`/operations?tab=tarifas&projectId=${selectedProjectId}`} className="underline">
+                    Agrega una tarifa
+                  </Link>{" "}
+                  antes de crear el viaje.
+                </p>
+              )}
             </div>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -399,10 +488,7 @@ export default function TripsPage(): JSX.Element {
               </div>
             </div>
 
-            <p className="text-xs text-muted-foreground">
-              El viaje se crea directamente en estado &quot;Asignado&quot;. Requiere una tarifa vigente configurada
-              para esta obra, ruta, material y (propietario o tipo de vehiculo).
-            </p>
+            <p className="text-xs text-muted-foreground">El viaje se crea directamente en estado &quot;Asignado&quot;.</p>
 
             {formError && <p className="text-sm text-destructive">{formError}</p>}
             <DialogFooter>

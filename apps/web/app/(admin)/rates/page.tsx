@@ -4,12 +4,13 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Power, PowerOff, Receipt } from "lucide-react";
+import { Plus, Power, PowerOff, Receipt, Trash2 } from "lucide-react";
 import { rateSchema, type RateInput } from "@valtic/validation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -33,6 +34,9 @@ export default function RatesPage(): JSX.Element {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Rate | null>(null);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const [projectFilter, setProjectFilter] = useState("");
   const [materialFilter, setMaterialFilter] = useState("");
@@ -109,6 +113,20 @@ export default function RatesPage(): JSX.Element {
     mutationFn: ({ id, status }: { id: string; status: "ACTIVE" | "EXPIRED" | "INACTIVE" }) =>
       apiClient.patch<Rate>(`/rates/${id}/status`, { status }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["rates"] }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      apiClient.delete<void>(`/rates/${id}`, { body: reason ? { reason } : {} }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["rates"] });
+      setDeleteTarget(null);
+      setDeleteReason("");
+      setDeleteError(null);
+    },
+    onError: (error: unknown) => {
+      setDeleteError(error instanceof ApiError ? error.response.message : "No se pudo eliminar la tarifa.");
+    },
   });
 
   const projects = projectsData?.data ?? [];
@@ -229,16 +247,30 @@ export default function RatesPage(): JSX.Element {
                     <StatusBadge status={rate.status} />
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label={rate.status === "ACTIVE" ? "Desactivar" : "Activar"}
-                      onClick={() =>
-                        statusMutation.mutate({ id: rate.id, status: rate.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" })
-                      }
-                    >
-                      {rate.status === "ACTIVE" ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
-                    </Button>
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={rate.status === "ACTIVE" ? "Desactivar" : "Activar"}
+                        onClick={() =>
+                          statusMutation.mutate({ id: rate.id, status: rate.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" })
+                        }
+                      >
+                        {rate.status === "ACTIVE" ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Eliminar"
+                        onClick={() => {
+                          setDeleteTarget(rate);
+                          setDeleteReason("");
+                          setDeleteError(null);
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -383,6 +415,40 @@ export default function RatesPage(): JSX.Element {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Eliminar tarifa</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Vas a eliminar esta tarifa ({deleteTarget?.originSite?.name} → {deleteTarget?.destinationSite?.name}).
+              La obra y sus puntos operativos no se ven afectados. Se bloquea si tiene viajes en curso.
+            </p>
+            <div className="space-y-1.5">
+              <Label htmlFor="rate-delete-reason">Motivo (opcional)</Label>
+              <Textarea
+                id="rate-delete-reason"
+                rows={2}
+                value={deleteReason}
+                onChange={(e) => setDeleteReason(e.target.value)}
+                placeholder="Por que se elimina esta tarifa..."
+              />
+            </div>
+            {deleteError && <p className="text-sm text-destructive">{deleteError}</p>}
+            <DialogFooter>
+              <Button
+                variant="destructive"
+                disabled={deleteMutation.isPending}
+                onClick={() => deleteTarget && deleteMutation.mutate({ id: deleteTarget.id, reason: deleteReason })}
+              >
+                {deleteMutation.isPending ? "Eliminando..." : "Eliminar tarifa"}
+              </Button>
+            </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

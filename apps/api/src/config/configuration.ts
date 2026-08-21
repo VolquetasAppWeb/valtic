@@ -54,6 +54,12 @@ export interface AppConfig {
     apiKey: string | undefined;
     model: string;
   };
+  googleMaps: {
+    // Geocoding API — convierte las direcciones que Gemini normaliza en
+    // coordenadas reales (ver OperationsService.resolveAddress). Sin key,
+    // cae de vuelta a Nominatim (OpenStreetMap).
+    apiKey: string | undefined;
+  };
 }
 
 export default (): AppConfig => ({
@@ -109,5 +115,8 @@ export default (): AppConfig => ({
   gemini: {
     apiKey: process.env.GEMINI_API_KEY,
     model: process.env.GEMINI_MODEL ?? "gemini-3.6-flash",
+  },
+  googleMaps: {
+    apiKey: process.env.GOOGLE_MAPS_API_KEY,
   },
 });

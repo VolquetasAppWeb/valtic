@@ -325,8 +325,8 @@ export class TripsService {
     }
 
     const stored = await this.storageService.save(file, `trips/${tripId}/vouchers`);
-    const rawText = await this.ocrService.extractText(file.buffer);
-    const { quantity, unit, voucherNumber, fields } = this.ocrService.extractVoucherData(rawText);
+    const { rawText, extraction } = await this.ocrService.extractVoucherFromImage(file.buffer);
+    const { quantity, unit, voucherNumber, fields } = extraction;
 
     const [updated] = await this.prisma.$transaction([
       this.prisma.trip.update({

@@ -1,5 +1,5 @@
 import { addOutboxEvent, type DriverActionType, type OutboxLocation } from "./outbox";
-import { getCurrentPosition } from "./geolocation";
+import { getCurrentPosition, type CapturedPosition } from "./geolocation";
 import { syncOutbox } from "./sync-engine";
 
 export function getOrCreateDeviceId(): string {
@@ -15,12 +15,23 @@ export function getOrCreateDeviceId(): string {
 
 // Encola una accion de progreso en el outbox (siempre local primero) y
 // dispara un intento de sincronizacion inmediato sin bloquear la UI.
-export async function queueDriverAction(tripId: string, action: DriverActionType): Promise<void> {
+//
+// knownPosition viene del rastreo GPS en curso (useGpsTracking), que ya esta
+// pidiendole posicion al dispositivo de fondo desde que se acepto el viaje.
+// Si la pasamos, evitamos pedirle al GPS una posicion nueva desde cero en
+// cada boton (eso es lo que hacia que "Registrando..." se demorara hasta 10s
+// por tap, sobre todo con señal debil). Solo se hace una peticion nueva
+// (bloqueante) cuando todavia no hay ninguna posicion conocida.
+export async function queueDriverAction(
+  tripId: string,
+  action: DriverActionType,
+  knownPosition?: CapturedPosition | null,
+): Promise<void> {
   const deviceId = getOrCreateDeviceId();
   let location: OutboxLocation | undefined;
 
   try {
-    const position = await getCurrentPosition();
+    const position = knownPosition ?? (await getCurrentPosition());
     location = {
       latitude: position.latitude,
       longitude: position.longitude,

@@ -5,9 +5,7 @@ import {
   Building2,
   Truck,
   HardHat,
-  MapPin,
   Package,
-  Receipt,
   Route,
   Radar,
   AlertTriangle,
@@ -33,8 +31,22 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/drivers", label: "Conductores", icon: Users, permission: [PERMISSIONS.DRIVERS_MANAGE, PERMISSIONS.DRIVERS_READ] },
   { href: "/vehicles", label: "Vehiculos", icon: Truck, permission: [PERMISSIONS.VEHICLES_MANAGE, PERMISSIONS.VEHICLES_READ] },
-  { href: "/projects", label: "Obras", icon: HardHat, permission: [PERMISSIONS.PROJECTS_MANAGE, PERMISSIONS.PROJECTS_READ] },
-  { href: "/operational-sites", label: "Puntos operativos", icon: MapPin, permission: [PERMISSIONS.SITES_MANAGE, PERMISSIONS.SITES_READ] },
+  // Modulo fusionado: Obras + Puntos operativos + Tarifas en una sola
+  // pagina con pestañas (ver app/(admin)/operations/page.tsx) — antes eran
+  // 3 items de navegacion separados.
+  {
+    href: "/operations",
+    label: "Obras y tarifas",
+    icon: HardHat,
+    permission: [
+      PERMISSIONS.PROJECTS_MANAGE,
+      PERMISSIONS.PROJECTS_READ,
+      PERMISSIONS.SITES_MANAGE,
+      PERMISSIONS.SITES_READ,
+      PERMISSIONS.RATES_MANAGE,
+      PERMISSIONS.RATES_READ,
+    ],
+  },
   { href: "/trips", label: "Viajes", icon: Route, permission: PERMISSIONS.TRIPS_READ },
   { href: "/monitor", label: "Monitor en vivo", icon: Radar, permission: PERMISSIONS.TRIPS_READ },
   { href: "/incidents", label: "Novedades", icon: AlertTriangle, permission: PERMISSIONS.INCIDENTS_READ },
@@ -44,7 +56,6 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/users", label: "Usuarios", icon: UserCog, permission: PERMISSIONS.USERS_MANAGE },
   { href: "/fleet-owners", label: "Propietarios", icon: Building2, permission: PERMISSIONS.FLEET_OWNERS_MANAGE },
   { href: "/materials", label: "Materiales", icon: Package, permission: PERMISSIONS.MATERIALS_MANAGE },
-  { href: "/rates", label: "Tarifas", icon: Receipt, permission: PERMISSIONS.RATES_MANAGE },
   {
     href: "/settlements",
     label: "Liquidaciones",

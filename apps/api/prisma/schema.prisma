@@ -291,6 +291,9 @@ model User {
   uploadedDriverDocuments DriverDocument[] @relation("DriverDocumentUploadedBy")
   deletedDrivers      Driver[]        @relation("DriverDeletedBy")
   deletedVehicles     Vehicle[]       @relation("VehicleDeletedBy")
+  deletedProjects     Project[]       @relation("ProjectDeletedBy")
+  deletedOperationalSites OperationalSite[] @relation("OperationalSiteDeletedBy")
+  deletedRates        Rate[]          @relation("RateDeletedBy")
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -678,17 +681,28 @@ model Project {
   name        String
   code        String
   description String?
-  clientName  String
+  // Opcional: en el flujo de configuracion automatica el despachador puede
+  // no mencionar el cliente y la obra se crea igual.
+  clientName  String?
   status      ProjectStatus @default(PLANNED)
   startDate   DateTime
   endDate     DateTime?
   // Mismo patron que Driver.dispatcherId: null si la creo un TENANT_ADMIN.
   dispatcherId String?
+  // Soft-delete: al eliminar una obra se marcan tambien (en cascada, a
+  // nivel de aplicacion, no de la base de datos) sus puntos operativos y
+  // tarifas — nunca se borra la fila fisicamente, para no romper el
+  // historial de viajes que las referencian. Eliminar un punto operativo
+  // suelto NO afecta a la obra (ver OperationalSitesService.remove).
+  deletedAt    DateTime?
+  deletedById  String?
+  deleteReason String?
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
   tenant     Tenant @relation(fields: [tenantId], references: [id])
   dispatcher User?  @relation("DispatcherProjects", fields: [dispatcherId], references: [id])
+  deletedBy  User?  @relation("ProjectDeletedBy", fields: [deletedById], references: [id])
 
   operationalSites OperationalSite[]
   rates            Rate[]
@@ -697,6 +711,7 @@ model Project {
   @@unique([tenantId, code])
   @@index([tenantId, status])
   @@index([tenantId, dispatcherId])
+  @@index([tenantId, deletedAt])
 }
 
 model OperationalSite {
@@ -710,9 +725,15 @@ model OperationalSite {
   longitude       Float
   geofenceRadius  Int
   status          OperationalSiteStatus  @default(ACTIVE)
+  // Soft-delete propio (no depende de si la obra esta o no eliminada) —
+  // ver comentario en Project.deletedAt.
+  deletedAt    DateTime?
+  deletedById  String?
+  deleteReason String?
 
   tenant  Tenant  @relation(fields: [tenantId], references: [id])
   project Project @relation(fields: [projectId], references: [id])
+  deletedBy User? @relation("OperationalSiteDeletedBy", fields: [deletedById], references: [id])
 
   ratesAsOrigin      Rate[]         @relation("RateOriginSite")
   ratesAsDestination Rate[]         @relation("RateDestinationSite")
@@ -721,6 +742,7 @@ model OperationalSite {
   checkpointQrs      CheckpointQr[]
 
   @@index([tenantId, projectId])
+  @@index([tenantId, deletedAt])
 }
 
 model Material {
@@ -765,6 +787,10 @@ model Rate {
   // Cada DISPATCHER fija sus propias tarifas y solo ve/gestiona las suyas;
   // TENANT_ADMIN ve todas sin restriccion (historico completo del tenant).
   dispatcherId String?
+  // Soft-delete propio — ver comentario en Project.deletedAt.
+  deletedAt    DateTime?
+  deletedById  String?
+  deleteReason String?
 
   tenant          Tenant          @relation(fields: [tenantId], references: [id])
   project         Project         @relation(fields: [projectId], references: [id])
@@ -773,12 +799,14 @@ model Rate {
   material        Material        @relation(fields: [materialId], references: [id])
   fleetOwner      FleetOwner?     @relation(fields: [fleetOwnerId], references: [id])
   dispatcher      User?           @relation("DispatcherRates", fields: [dispatcherId], references: [id])
+  deletedBy       User?           @relation("RateDeletedBy", fields: [deletedById], references: [id])
 
   trips Trip[]
 
   @@index([tenantId, projectId, status])
   @@index([tenantId, originSiteId, destinationSiteId, materialId])
   @@index([tenantId, dispatcherId])
+  @@index([tenantId, deletedAt])
 }
 
 // ---------------------------------------------------------------------------
