@@ -559,7 +559,7 @@ export default function VehiclesPage(): JSX.Element {
             <DialogTitle>{infoVehicle?.plate}</DialogTitle>
           </DialogHeader>
           <div className="max-h-[70vh] space-y-4 overflow-y-auto">
-            <div className="grid grid-cols-2 gap-3 rounded-md border border-border bg-secondary/40 p-4 text-sm">
+            <div className="grid grid-cols-1 gap-3 rounded-md border border-border bg-secondary/40 p-4 text-sm sm:grid-cols-2">
               <InfoField label="Tipo" value={infoVehicle ? VEHICLE_TYPE_LABEL[infoVehicle.vehicleType] : undefined} />
               <InfoField label="Estado" value={infoVehicle?.status} />
               <InfoField
@@ -581,7 +581,7 @@ export default function VehiclesPage(): JSX.Element {
               {loadingInfoDocuments ? (
                 <Skeleton className="h-24 w-full" />
               ) : (
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   <PhotoThumb label="Frente" doc={infoFrontDoc} />
                   <PhotoThumb label="Reverso" doc={infoBackDoc} />
                   <PhotoThumb label="Volqueta" doc={infoTruckDoc} />
@@ -590,7 +590,7 @@ export default function VehiclesPage(): JSX.Element {
               {infoOtherDocs.length > 0 && (
                 <div className="space-y-1.5 pt-2">
                   <p className="text-xs text-muted-foreground">Otras fotos subidas</p>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                     {infoOtherDocs.map((doc) => (
                       <PhotoThumb key={doc.id} label={new Date(doc.createdAt).toLocaleDateString("es-CO")} doc={doc} />
                     ))}
@@ -743,7 +743,7 @@ function VehicleCardDetails({ vehicle }: { vehicle: Vehicle }): JSX.Element {
       {CARD_FIELD_GROUPS.map((group) => (
         <div key={group.title} className="space-y-2">
           <p className="text-xs font-medium text-muted-foreground">{group.title}</p>
-          <div className="grid grid-cols-2 gap-3 rounded-md border border-border bg-secondary/40 p-3 text-sm">
+          <div className="grid grid-cols-1 gap-3 rounded-md border border-border bg-secondary/40 p-3 text-sm sm:grid-cols-2">
             {group.fields.map((field) => {
               const value = vehicle[field.key];
               return <InfoField key={field.key} label={field.label} value={value != null ? String(value) : null} />;

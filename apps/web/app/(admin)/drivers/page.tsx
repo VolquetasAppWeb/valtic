@@ -624,7 +624,7 @@ export default function DriversPage(): JSX.Element {
             </DialogTitle>
           </DialogHeader>
           <div className="max-h-[70vh] space-y-4 overflow-y-auto">
-            <div className="grid grid-cols-2 gap-3 rounded-md border border-border bg-secondary/40 p-4 text-sm">
+            <div className="grid grid-cols-1 gap-3 rounded-md border border-border bg-secondary/40 p-4 text-sm sm:grid-cols-2">
               <InfoField label="Estado" value={infoDriver?.status} />
               <InfoField label="Vencimiento licencia" value={infoDriver?.licenseExpiration?.slice(0, 10)} />
             </div>
@@ -641,7 +641,7 @@ export default function DriversPage(): JSX.Element {
               {loadingInfoDocuments ? (
                 <Skeleton className="h-24 w-full" />
               ) : (
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <PhotoThumb label="Cedula frente" doc={infoCedulaFront} />
                   <PhotoThumb label="Cedula reverso" doc={infoCedulaBack} />
                   <PhotoThumb label="Licencia frente" doc={infoLicenseFront} />
@@ -830,7 +830,7 @@ function DriverCardDetails({ driver }: { driver: Driver }): JSX.Element {
       {DRIVER_CARD_FIELD_GROUPS.map((group) => (
         <div key={group.title} className="space-y-2">
           <p className="text-xs font-medium text-muted-foreground">{group.title}</p>
-          <div className="grid grid-cols-2 gap-3 rounded-md border border-border bg-secondary/40 p-3 text-sm">
+          <div className="grid grid-cols-1 gap-3 rounded-md border border-border bg-secondary/40 p-3 text-sm sm:grid-cols-2">
             {group.fields.map((field) => {
               const raw = driver[field.key];
               return <InfoField key={field.key} label={field.label} value={raw != null ? String(raw) : null} />;
