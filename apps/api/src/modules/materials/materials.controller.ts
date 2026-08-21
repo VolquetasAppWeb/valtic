@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
 import { PERMISSIONS } from "@valtic/types";
 import { Permissions } from "../../common/decorators/permissions.decorator";
@@ -11,6 +11,7 @@ import { MaterialsService } from "./materials.service";
 import { CreateMaterialDto } from "./dto/create-material.dto";
 import { UpdateMaterialDto } from "./dto/update-material.dto";
 import { MaterialQueryDto } from "./dto/material-query.dto";
+import { DeleteMaterialDto } from "./dto/delete-material.dto";
 
 @ApiTags("materials")
 @ApiBearerAuth()
@@ -71,5 +72,18 @@ export class MaterialsController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.materialsService.updateStatus(tenantId, id, dto.status, user);
+  }
+
+  @Delete(":id")
+  @HttpCode(204)
+  @Permissions(PERMISSIONS.MATERIALS_MANAGE)
+  @ApiOperation({ summary: "Elimina (soft-delete) un material; bloqueado si tiene viajes en curso" })
+  remove(
+    @Param("id") id: string,
+    @Body() dto: DeleteMaterialDto,
+    @TenantId() tenantId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.materialsService.remove(tenantId, id, dto.reason, user);
   }
 }

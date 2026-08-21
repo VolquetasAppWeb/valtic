@@ -10,6 +10,11 @@ export class SettlementQueryDto extends PaginationQueryDto {
   @IsUUID()
   fleetOwnerId?: string;
 
+  @ApiPropertyOptional({ description: "Filtra por el despachador asignado al propietario de flota" })
+  @IsOptional()
+  @IsUUID()
+  dispatcherId?: string;
+
   @ApiPropertyOptional({ enum: SETTLEMENT_STATUSES })
   @IsOptional()
   @IsIn(SETTLEMENT_STATUSES)

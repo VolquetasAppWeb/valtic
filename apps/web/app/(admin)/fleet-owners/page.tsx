@@ -4,25 +4,30 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Building2, Pencil, Plus, Power, PowerOff } from "lucide-react";
+import { Archive, Building2, Pencil, Plus, Power, PowerOff, Trash2 } from "lucide-react";
+import { PERMISSIONS } from "@valtic/types";
 import { fleetOwnerSchema, type FleetOwnerInput } from "@valtic/validation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { apiClient, ApiError } from "@/lib/api-client";
-import type { AdminUser, FleetOwner, PaginatedResult } from "@/lib/api-types";
+import { usePermissions } from "@/hooks/use-permissions";
+import type { AdminUser, DeletedFleetOwner, FleetOwner, PaginatedResult } from "@/lib/api-types";
 
 const TYPE_LABEL: Record<string, string> = { NATURAL_PERSON: "Persona natural", LEGAL_ENTITY: "Persona juridica" };
 
 export default function FleetOwnersPage(): JSX.Element {
   const queryClient = useQueryClient();
+  const { has } = usePermissions();
+  const canSeeDeletedLog = has([PERMISSIONS.AUDIT_READ, PERMISSIONS.AUDIT_READ_GLOBAL]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<FleetOwner | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -31,6 +36,10 @@ export default function FleetOwnersPage(): JSX.Element {
   const [search, setSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<FleetOwner | null>(null);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletedLogOpen, setDeletedLogOpen] = useState(false);
 
   const ownerParams = new URLSearchParams({ pageSize: "100" });
   if (appliedSearch) ownerParams.set("search", appliedSearch);
@@ -111,6 +120,27 @@ export default function FleetOwnersPage(): JSX.Element {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["fleet-owners"] }),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      apiClient.delete<void>(`/fleet-owners/${id}`, { body: reason ? { reason } : {} }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["fleet-owners"] });
+      setDeleteTarget(null);
+      setDeleteReason("");
+      setDeleteError(null);
+    },
+    onError: (error: unknown) => {
+      setDeleteError(error instanceof ApiError ? error.response.message : "No se pudo eliminar el propietario.");
+    },
+  });
+
+  const { data: deletedData, isLoading: loadingDeleted } = useQuery({
+    queryKey: ["fleet-owners", "deleted"],
+    queryFn: () => apiClient.get<PaginatedResult<DeletedFleetOwner>>("/fleet-owners/deleted?pageSize=100"),
+    enabled: deletedLogOpen && canSeeDeletedLog,
+  });
+  const deletedOwners = deletedData?.data ?? [];
+
   const owners = data?.data ?? [];
   const typeValue = watch("type");
 
@@ -121,10 +151,18 @@ export default function FleetOwnersPage(): JSX.Element {
           <h1 className="text-2xl font-semibold tracking-tight">Propietarios</h1>
           <p className="text-sm text-muted-foreground">Propietarios de la flota de vehiculos.</p>
         </div>
-        <Button onClick={openCreate}>
-          <Plus className="h-4 w-4" />
-          Nuevo propietario
-        </Button>
+        <div className="flex gap-2">
+          {canSeeDeletedLog && (
+            <Button variant="outline" onClick={() => setDeletedLogOpen(true)}>
+              <Archive className="h-4 w-4" />
+              Ver eliminados
+            </Button>
+          )}
+          <Button onClick={openCreate}>
+            <Plus className="h-4 w-4" />
+            Nuevo propietario
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-end gap-4">
@@ -209,6 +247,18 @@ export default function FleetOwnersPage(): JSX.Element {
                         }
                       >
                         {owner.status === "ACTIVE" ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Eliminar"
+                        onClick={() => {
+                          setDeleteTarget(owner);
+                          setDeleteReason("");
+                          setDeleteError(null);
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>
                   </TableCell>
@@ -301,6 +351,85 @@ export default function FleetOwnersPage(): JSX.Element {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Eliminar propietario</DialogTitle>
+            <DialogDescription>
+              Vas a eliminar a <span className="font-medium text-foreground">{deleteTarget?.name}</span>. Sus
+              vehiculos, viajes y liquidaciones historicas se conservan intactos; el propietario solo deja de
+              aparecer disponible para asignar en vehiculos o tarifas nuevas.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="owner-delete-reason">Motivo (opcional)</Label>
+            <Textarea
+              id="owner-delete-reason"
+              rows={2}
+              value={deleteReason}
+              onChange={(e) => setDeleteReason(e.target.value)}
+            />
+          </div>
+          {deleteError && <p className="text-sm text-destructive">{deleteError}</p>}
+          <DialogFooter>
+            <Button
+              variant="destructive"
+              disabled={deleteMutation.isPending}
+              onClick={() => deleteTarget && deleteMutation.mutate({ id: deleteTarget.id, reason: deleteReason })}
+            >
+              {deleteMutation.isPending ? "Eliminando..." : "Eliminar propietario"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deletedLogOpen} onOpenChange={setDeletedLogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Propietarios eliminados</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Historial de eliminaciones de propietarios de la empresa. Solo visible para administradores.
+            </p>
+            {loadingDeleted ? (
+              <Skeleton className="h-40 w-full" />
+            ) : deletedOwners.length === 0 ? (
+              <EmptyState icon={Archive} title="Sin eliminaciones" description="Ningun propietario ha sido eliminado todavia." />
+            ) : (
+              <div className="max-h-[60vh] overflow-y-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Nombre</TableHead>
+                      <TableHead>Documento</TableHead>
+                      <TableHead>Eliminado</TableHead>
+                      <TableHead>Por</TableHead>
+                      <TableHead>Motivo</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {deletedOwners.map((owner) => (
+                      <TableRow key={owner.id}>
+                        <TableCell className="font-medium">{owner.name}</TableCell>
+                        <TableCell className="text-muted-foreground">{owner.documentNumber}</TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {new Date(owner.deletedAt).toLocaleString("es-CO")}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {owner.deletedBy ? `${owner.deletedBy.firstName} ${owner.deletedBy.lastName}` : "—"}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">{owner.deleteReason ?? "—"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>

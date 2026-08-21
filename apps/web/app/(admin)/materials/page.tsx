@@ -4,15 +4,16 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Package, Pencil, Plus, PowerOff, Power } from "lucide-react";
+import { Package, Pencil, Plus, PowerOff, Power, Trash2 } from "lucide-react";
 import { materialSchema, type MaterialInput } from "@valtic/validation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/admin/status-badge";
@@ -24,6 +25,9 @@ export default function MaterialsPage(): JSX.Element {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Material | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Material | null>(null);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
@@ -78,6 +82,20 @@ export default function MaterialsPage(): JSX.Element {
     mutationFn: ({ id, status }: { id: string; status: "ACTIVE" | "INACTIVE" }) =>
       apiClient.patch<Material>(`/materials/${id}/status`, { status }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["materials"] }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      apiClient.delete<void>(`/materials/${id}`, { body: reason ? { reason } : {} }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["materials"] });
+      setDeleteTarget(null);
+      setDeleteReason("");
+      setDeleteError(null);
+    },
+    onError: (error: unknown) => {
+      setDeleteError(error instanceof ApiError ? error.response.message : "No se pudo eliminar el material.");
+    },
   });
 
   const materials = data?.data ?? [];
@@ -187,6 +205,18 @@ export default function MaterialsPage(): JSX.Element {
                           <Power className="h-4 w-4" />
                         )}
                       </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Eliminar"
+                        onClick={() => {
+                          setDeleteTarget(material);
+                          setDeleteReason("");
+                          setDeleteError(null);
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -226,6 +256,38 @@ export default function MaterialsPage(): JSX.Element {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Eliminar material</DialogTitle>
+            <DialogDescription>
+              Vas a eliminar <span className="font-medium text-foreground">{deleteTarget?.name}</span>. Las tarifas y
+              viajes que ya lo usaron mantienen su historial intacto; el material solo deja de estar disponible para
+              elegirlo en tarifas o viajes nuevos.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="material-delete-reason">Motivo (opcional)</Label>
+            <Textarea
+              id="material-delete-reason"
+              rows={2}
+              value={deleteReason}
+              onChange={(e) => setDeleteReason(e.target.value)}
+            />
+          </div>
+          {deleteError && <p className="text-sm text-destructive">{deleteError}</p>}
+          <DialogFooter>
+            <Button
+              variant="destructive"
+              disabled={deleteMutation.isPending}
+              onClick={() => deleteTarget && deleteMutation.mutate({ id: deleteTarget.id, reason: deleteReason })}
+            >
+              {deleteMutation.isPending ? "Eliminando..." : "Eliminar material"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

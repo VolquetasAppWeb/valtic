@@ -2,6 +2,7 @@ import { ConflictException, Injectable, NotFoundException } from "@nestjs/common
 import { PrismaService } from "../../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { toPaginatedResponse } from "../../common/pagination";
+import { IN_PROGRESS_STATUSES } from "../trips/domain/trip-state-machine";
 import type { AuthenticatedUser } from "../../common/types/authenticated-user";
 import type { MaterialQueryDto } from "./dto/material-query.dto";
 import type { CreateMaterialDto } from "./dto/create-material.dto";
@@ -68,6 +69,7 @@ export class MaterialsService {
   async findAll(tenantId: string, query: MaterialQueryDto) {
     const where = {
       tenantId,
+      deletedAt: null,
       ...(query.status ? { status: query.status } : {}),
       ...(query.search
         ? { OR: [{ name: { contains: query.search, mode: "insensitive" as const } }, { code: { contains: query.search, mode: "insensitive" as const } }] }
@@ -88,7 +90,7 @@ export class MaterialsService {
   }
 
   async findById(tenantId: string, id: string) {
-    const material = await this.prisma.material.findFirst({ where: { id, tenantId } });
+    const material = await this.prisma.material.findFirst({ where: { id, tenantId, deletedAt: null } });
     if (!material) {
       throw new NotFoundException({ code: "MATERIAL_NOT_FOUND", message: "Material no encontrado." });
     }
@@ -124,6 +126,40 @@ export class MaterialsService {
       entityId: material.id,
       oldValue: { status: material.status },
       newValue: { status: updated.status },
+    });
+
+    return updated;
+  }
+
+  // Soft-delete: nunca se borra la fila (el material puede estar referenciado
+  // por tarifas/viajes historicos via FK), queda excluida de las consultas
+  // normales (deletedAt: null). Bloqueado si tiene viajes en curso.
+  async remove(tenantId: string, id: string, reason: string | undefined, actor: AuthenticatedUser) {
+    const material = await this.findById(tenantId, id);
+
+    const activeTrips = await this.prisma.trip.count({
+      where: { materialId: id, status: { in: IN_PROGRESS_STATUSES } },
+    });
+    if (activeTrips > 0) {
+      throw new ConflictException({
+        code: "MATERIAL_HAS_ACTIVE_TRIPS",
+        message: "No se puede eliminar un material con viajes en curso.",
+      });
+    }
+
+    const updated = await this.prisma.material.update({
+      where: { id },
+      data: { deletedAt: new Date(), deletedById: actor.sub, deleteReason: reason, status: "INACTIVE" },
+    });
+
+    await this.auditService.record({
+      tenantId,
+      actorUserId: actor.sub,
+      action: "MATERIAL_DELETED",
+      entityType: "Material",
+      entityId: id,
+      reason,
+      oldValue: { name: material.name, code: material.code },
     });
 
     return updated;

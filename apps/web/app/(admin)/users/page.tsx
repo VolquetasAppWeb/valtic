@@ -5,20 +5,35 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Plus, Power, PowerOff, UserCog } from "lucide-react";
+import Link from "next/link";
+import { Archive, BarChart3, Plus, Power, PowerOff, Trash2, UserCog } from "lucide-react";
+import { PERMISSIONS } from "@valtic/types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { apiClient, ApiError } from "@/lib/api-client";
 import { useAuthStore } from "@/stores/auth-store";
-import type { AdminUser } from "@/lib/api-types";
+import { usePermissions } from "@/hooks/use-permissions";
+import type { AdminUser, DeletedUser, PaginatedResult } from "@/lib/api-types";
+
+interface DispatcherStats {
+  tripsTotal: number;
+  tripsCompleted: number;
+  vehiclesCount: number;
+  moneyPaid: string;
+  moneyPendingSettlement: string;
+}
+
+const money = (value: string | number) =>
+  new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(Number(value));
 
 const ROLE_LABEL: Record<string, string> = { TENANT_ADMIN: "Administrador", DISPATCHER: "Despachador" };
 
@@ -36,12 +51,19 @@ type UserInput = z.infer<typeof userSchema>;
 export default function UsersPage(): JSX.Element {
   const queryClient = useQueryClient();
   const currentUserId = useAuthStore((state) => state.user?.id);
+  const { has } = usePermissions();
+  const canSeeDeletedLog = has([PERMISSIONS.AUDIT_READ, PERMISSIONS.AUDIT_READ_GLOBAL]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [statsTarget, setStatsTarget] = useState<AdminUser | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AdminUser | null>(null);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletedLogOpen, setDeletedLogOpen] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ["users"],
@@ -81,6 +103,33 @@ export default function UsersPage(): JSX.Element {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["users"] }),
   });
 
+  const { data: dispatcherStats, isFetching: loadingStats } = useQuery({
+    queryKey: ["users", "stats", statsTarget?.id],
+    queryFn: () => apiClient.get<DispatcherStats>(`/users/${statsTarget!.id}/stats`),
+    enabled: !!statsTarget,
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      apiClient.delete<void>(`/users/${id}`, { body: reason ? { reason } : {} }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      setDeleteTarget(null);
+      setDeleteReason("");
+      setDeleteError(null);
+    },
+    onError: (error: unknown) => {
+      setDeleteError(error instanceof ApiError ? error.response.message : "No se pudo eliminar el usuario.");
+    },
+  });
+
+  const { data: deletedData, isLoading: loadingDeleted } = useQuery({
+    queryKey: ["users", "deleted"],
+    queryFn: () => apiClient.get<PaginatedResult<DeletedUser>>("/users/deleted?pageSize=100"),
+    enabled: deletedLogOpen && canSeeDeletedLog,
+  });
+  const deletedUsers = deletedData?.data ?? [];
+
   const normalizedSearch = search.trim().toLowerCase();
   const users = (data ?? []).filter((user) => {
     const matchesSearch =
@@ -101,10 +150,18 @@ export default function UsersPage(): JSX.Element {
             Cuentas administrativas de la empresa: administradores y despachadores.
           </p>
         </div>
-        <Button onClick={openCreate}>
-          <Plus className="h-4 w-4" />
-          Nuevo usuario
-        </Button>
+        <div className="flex gap-2">
+          {canSeeDeletedLog && (
+            <Button variant="outline" onClick={() => setDeletedLogOpen(true)}>
+              <Archive className="h-4 w-4" />
+              Ver eliminados
+            </Button>
+          )}
+          <Button onClick={openCreate}>
+            <Plus className="h-4 w-4" />
+            Nuevo usuario
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-end gap-4">
@@ -185,18 +242,45 @@ export default function UsersPage(): JSX.Element {
                     <StatusBadge status={user.status} />
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label={user.status === "ACTIVE" ? "Desactivar" : "Activar"}
-                      disabled={user.id === currentUserId}
-                      title={user.id === currentUserId ? "No puedes desactivar tu propia cuenta" : undefined}
-                      onClick={() =>
-                        statusMutation.mutate({ id: user.id, status: user.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" })
-                      }
-                    >
-                      {user.status === "ACTIVE" ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
-                    </Button>
+                    <div className="flex justify-end gap-1">
+                      {user.userRoles.some((ur) => ur.role.name === "DISPATCHER") && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Ver estadisticas"
+                          title="Ver estadisticas del despachador"
+                          onClick={() => setStatsTarget(user)}
+                        >
+                          <BarChart3 className="h-4 w-4" />
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={user.status === "ACTIVE" ? "Desactivar" : "Activar"}
+                        disabled={user.id === currentUserId}
+                        title={user.id === currentUserId ? "No puedes desactivar tu propia cuenta" : undefined}
+                        onClick={() =>
+                          statusMutation.mutate({ id: user.id, status: user.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" })
+                        }
+                      >
+                        {user.status === "ACTIVE" ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Eliminar"
+                        disabled={user.id === currentUserId}
+                        title={user.id === currentUserId ? "No puedes eliminar tu propia cuenta" : undefined}
+                        onClick={() => {
+                          setDeleteTarget(user);
+                          setDeleteReason("");
+                          setDeleteError(null);
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -265,6 +349,138 @@ export default function UsersPage(): JSX.Element {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!statsTarget} onOpenChange={(open) => !open && setStatsTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Estadisticas — {statsTarget?.firstName} {statsTarget?.lastName}
+            </DialogTitle>
+            <DialogDescription>Viajes, volquetas a cargo y dinero liquidado de este despachador.</DialogDescription>
+          </DialogHeader>
+          {loadingStats ? (
+            <div className="space-y-2">
+              <Skeleton className="h-16 w-full" />
+              <Skeleton className="h-16 w-full" />
+            </div>
+          ) : dispatcherStats ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-md border border-border bg-secondary/40 p-4">
+                  <p className="text-sm text-muted-foreground">Viajes totales</p>
+                  <p className="text-2xl font-bold">{dispatcherStats.tripsTotal}</p>
+                </div>
+                <div className="rounded-md border border-border bg-secondary/40 p-4">
+                  <p className="text-sm text-muted-foreground">Viajes completados</p>
+                  <p className="text-2xl font-bold">{dispatcherStats.tripsCompleted}</p>
+                </div>
+                <div className="rounded-md border border-border bg-secondary/40 p-4">
+                  <p className="text-sm text-muted-foreground">Volquetas a cargo</p>
+                  <p className="text-2xl font-bold">{dispatcherStats.vehiclesCount}</p>
+                </div>
+                <div className="rounded-md border border-border bg-secondary/40 p-4">
+                  <p className="text-sm text-muted-foreground">Dinero pagado</p>
+                  <p className="text-2xl font-bold">{money(dispatcherStats.moneyPaid)}</p>
+                </div>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Pendiente por liquidar: <span className="font-medium text-foreground">{money(dispatcherStats.moneyPendingSettlement)}</span>
+              </p>
+              <Button asChild variant="outline" className="w-full">
+                <Link href={`/settlements?dispatcherId=${statsTarget?.id}`} onClick={() => setStatsTarget(null)}>
+                  Ver liquidaciones de este despachador
+                </Link>
+              </Button>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No se pudieron cargar las estadisticas.</p>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Eliminar usuario</DialogTitle>
+            <DialogDescription>
+              Vas a eliminar a{" "}
+              <span className="font-medium text-foreground">
+                {deleteTarget?.firstName} {deleteTarget?.lastName}
+              </span>
+              . Ya no podra iniciar sesion, pero su historial (viajes creados, tarifas, auditoria) se conserva. Un
+              administrador puede consultar esta eliminacion en &quot;Ver eliminados&quot;.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="user-delete-reason">Motivo (opcional)</Label>
+            <Textarea
+              id="user-delete-reason"
+              rows={2}
+              value={deleteReason}
+              onChange={(e) => setDeleteReason(e.target.value)}
+            />
+          </div>
+          {deleteError && <p className="text-sm text-destructive">{deleteError}</p>}
+          <DialogFooter>
+            <Button
+              variant="destructive"
+              disabled={deleteMutation.isPending}
+              onClick={() => deleteTarget && deleteMutation.mutate({ id: deleteTarget.id, reason: deleteReason })}
+            >
+              {deleteMutation.isPending ? "Eliminando..." : "Eliminar usuario"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deletedLogOpen} onOpenChange={setDeletedLogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Usuarios eliminados</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Historial de eliminaciones de usuarios de la empresa. Solo visible para administradores.
+            </p>
+            {loadingDeleted ? (
+              <Skeleton className="h-40 w-full" />
+            ) : deletedUsers.length === 0 ? (
+              <EmptyState icon={Archive} title="Sin eliminaciones" description="Ningun usuario ha sido eliminado todavia." />
+            ) : (
+              <div className="max-h-[60vh] overflow-y-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Nombre</TableHead>
+                      <TableHead>Correo</TableHead>
+                      <TableHead>Eliminado</TableHead>
+                      <TableHead>Por</TableHead>
+                      <TableHead>Motivo</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {deletedUsers.map((user) => (
+                      <TableRow key={user.id}>
+                        <TableCell className="font-medium">
+                          {user.firstName} {user.lastName}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">{user.email}</TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {new Date(user.deletedAt).toLocaleString("es-CO")}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {user.deletedBy ? `${user.deletedBy.firstName} ${user.deletedBy.lastName}` : "—"}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">{user.deleteReason ?? "—"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>

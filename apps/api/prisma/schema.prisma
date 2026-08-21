@@ -270,7 +270,15 @@ model User {
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
+  // Soft-delete propio — ver comentario en Project.deletedAt. deletedById es
+  // auto-referencial (otro User del mismo tenant, siempre TENANT_ADMIN).
+  deletedAt    DateTime?
+  deletedById  String?
+  deleteReason String?
+
   tenant Tenant? @relation(fields: [tenantId], references: [id])
+  deletedBy    User?  @relation("UserDeletedBy", fields: [deletedById], references: [id])
+  deletedUsers User[] @relation("UserDeletedBy")
 
   userRoles         UserRole[]
   driverProfile     Driver?
@@ -294,9 +302,12 @@ model User {
   deletedProjects     Project[]       @relation("ProjectDeletedBy")
   deletedOperationalSites OperationalSite[] @relation("OperationalSiteDeletedBy")
   deletedRates        Rate[]          @relation("RateDeletedBy")
+  deletedMaterials    Material[]      @relation("MaterialDeletedBy")
+  deletedFleetOwners  FleetOwner[]    @relation("FleetOwnerDeletedBy")
 
   @@unique([tenantId, email])
   @@index([tenantId])
+  @@index([tenantId, deletedAt])
   @@index([passwordResetTokenHash])
 }
 
@@ -525,9 +536,15 @@ model FleetOwner {
   // Driver/Vehicle/Project). Solo TENANT_ADMIN asigna esto al crear/editar.
   dispatcherId        String?
 
+  // Soft-delete propio — ver comentario en Project.deletedAt.
+  deletedAt    DateTime?
+  deletedById  String?
+  deleteReason String?
+
   tenant     Tenant @relation(fields: [tenantId], references: [id])
   user       User?  @relation(fields: [userId], references: [id])
   dispatcher User?  @relation("DispatcherFleetOwners", fields: [dispatcherId], references: [id])
+  deletedBy  User?  @relation("FleetOwnerDeletedBy", fields: [deletedById], references: [id])
 
   vehicles    Vehicle[]
   trips       Trip[]
@@ -537,6 +554,7 @@ model FleetOwner {
   @@unique([tenantId, documentNumber])
   @@index([tenantId, status])
   @@index([tenantId, dispatcherId])
+  @@index([tenantId, deletedAt])
 }
 
 model Vehicle {
@@ -753,12 +771,19 @@ model Material {
   unit     String
   status   MaterialStatus @default(ACTIVE)
 
-  tenant Tenant @relation(fields: [tenantId], references: [id])
-  rates  Rate[]
-  trips  Trip[]
+  // Soft-delete propio — ver comentario en Project.deletedAt.
+  deletedAt    DateTime?
+  deletedById  String?
+  deleteReason String?
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id])
+  deletedBy User?  @relation("MaterialDeletedBy", fields: [deletedById], references: [id])
+  rates     Rate[]
+  trips     Trip[]
 
   @@unique([tenantId, code])
   @@index([tenantId, status])
+  @@index([tenantId, deletedAt])
 }
 
 // ---------------------------------------------------------------------------

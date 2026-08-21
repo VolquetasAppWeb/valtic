@@ -23,6 +23,12 @@ export interface FleetOwner {
   _count?: { vehicles: number };
 }
 
+export interface DeletedFleetOwner extends FleetOwner {
+  deletedAt: string;
+  deleteReason: string | null;
+  deletedBy: { id: string; firstName: string; lastName: string } | null;
+}
+
 export interface DriverVehicleAssignmentRef {
   id: string;
   active: boolean;
@@ -499,6 +505,12 @@ export interface AdminUser {
   lastLoginAt: string | null;
   createdAt: string;
   userRoles: Array<{ role: { id: string; name: string } }>;
+}
+
+export interface DeletedUser extends AdminUser {
+  deletedAt: string;
+  deleteReason: string | null;
+  deletedBy: { id: string; firstName: string; lastName: string } | null;
 }
 
 export interface AuditEvent {

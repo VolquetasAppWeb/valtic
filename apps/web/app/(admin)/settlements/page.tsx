@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -104,6 +105,11 @@ export default function SettlementsPage(): JSX.Element {
   // — eso sigue siendo exclusivo de canManage.
   const canCreate = canManage || permissions.includes(PERMISSIONS.SETTLEMENTS_CREATE_OWN);
 
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const dispatcherId = searchParams.get("dispatcherId");
+
   const [statusFilter, setStatusFilter] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [preview, setPreview] = useState<SettlementPreview | null>(null);
@@ -113,9 +119,11 @@ export default function SettlementsPage(): JSX.Element {
   const [actionError, setActionError] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["settlements", statusFilter],
+    queryKey: ["settlements", statusFilter, dispatcherId],
     queryFn: () =>
-      apiClient.get<PaginatedResult<Settlement>>(`/settlements?pageSize=50${statusFilter ? `&status=${statusFilter}` : ""}`),
+      apiClient.get<PaginatedResult<Settlement>>(
+        `/settlements?pageSize=50${statusFilter ? `&status=${statusFilter}` : ""}${dispatcherId ? `&dispatcherId=${dispatcherId}` : ""}`,
+      ),
     refetchInterval: 15_000,
   });
 
@@ -266,6 +274,14 @@ export default function SettlementsPage(): JSX.Element {
             <SelectItem value="CANCELLED">Cancelada</SelectItem>
           </SelectContent>
         </Select>
+        {dispatcherId && (
+          <Badge variant="secondary" className="gap-2">
+            Filtrado por despachador
+            <button type="button" className="underline" onClick={() => router.replace(pathname)}>
+              Quitar filtro
+            </button>
+          </Badge>
+        )}
       </div>
 
       <Card className="p-0">

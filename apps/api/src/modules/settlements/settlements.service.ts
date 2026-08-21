@@ -200,6 +200,7 @@ export class SettlementsService {
       tenantId,
       ...settlementScopeWhere(actor),
       ...(query.fleetOwnerId ? { fleetOwnerId: query.fleetOwnerId } : {}),
+      ...(query.dispatcherId ? { fleetOwner: { dispatcherId: query.dispatcherId } } : {}),
       ...(query.status ? { status: query.status } : {}),
     };
 
