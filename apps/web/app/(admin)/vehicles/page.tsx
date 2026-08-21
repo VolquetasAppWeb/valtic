@@ -30,6 +30,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { apiClient, ApiError } from "@/lib/api-client";
+import { compressImage } from "@/lib/image-compress";
 import { usePermissions } from "@/hooks/use-permissions";
 import type {
   DeletedVehicle,
@@ -816,20 +817,28 @@ function PhotoPicker({
         </Button>
       </div>
       {/* Dos inputs separados: "capture" fuerza la camara en movil, sin
-          "capture" el sistema ofrece la galeria/archivos. */}
+          "capture" el sistema ofrece la galeria/archivos. Se comprime antes
+          de pasarla al padre: reduce el tiempo de subida y de lectura por
+          IA sin perder legibilidad (ver lib/image-compress.ts). */}
       <input
         id={`${idPrefix}-camera`}
         type="file"
         accept="image/*"
         capture="environment"
-        onChange={(e) => onChange(e.target.files?.[0] ?? null)}
+        onChange={async (e) => {
+          const picked = e.target.files?.[0] ?? null;
+          onChange(picked ? await compressImage(picked) : null);
+        }}
         className="hidden"
       />
       <input
         id={`${idPrefix}-gallery`}
         type="file"
         accept="image/*"
-        onChange={(e) => onChange(e.target.files?.[0] ?? null)}
+        onChange={async (e) => {
+          const picked = e.target.files?.[0] ?? null;
+          onChange(picked ? await compressImage(picked) : null);
+        }}
         className="hidden"
       />
       {file && <p className="text-xs text-muted-foreground">Foto seleccionada: {file.name}</p>}

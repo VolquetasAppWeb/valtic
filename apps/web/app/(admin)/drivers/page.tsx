@@ -41,6 +41,7 @@ import type {
   DriverLicenseExtraction,
   PaginatedResult,
 } from "@/lib/api-types";
+import { compressImage } from "@/lib/image-compress";
 
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001/api/v1").replace(/\/api\/v1\/?$/, "");
 
@@ -230,12 +231,18 @@ export default function DriversPage(): JSX.Element {
       const cedulaForm = new FormData();
       cedulaForm.append("front", cedulaFrontFile);
       cedulaForm.append("back", cedulaBackFile);
-      const cedula = await apiClient.post<CedulaExtraction>("/drivers/extract-cedula", cedulaForm);
 
       const licenseForm = new FormData();
       licenseForm.append("front", licenseFrontFile);
       licenseForm.append("back", licenseBackFile);
-      const license = await apiClient.post<DriverLicenseExtraction>("/drivers/extract-license", licenseForm);
+
+      // Son dos llamados a Gemini totalmente independientes (cedula y
+      // licencia no dependen entre si) — mandarlos en paralelo en vez de
+      // uno tras otro corta a la mitad el tiempo de espera.
+      const [cedula, license] = await Promise.all([
+        apiClient.post<CedulaExtraction>("/drivers/extract-cedula", cedulaForm),
+        apiClient.post<DriverLicenseExtraction>("/drivers/extract-license", licenseForm),
+      ]);
 
       if (!cedula.documentNumber) {
         throw new Error("NO_DOCUMENT_NUMBER");
@@ -903,20 +910,28 @@ function PhotoPicker({
         </Button>
       </div>
       {/* Dos inputs separados: "capture" fuerza la camara en movil, sin
-          "capture" el sistema ofrece la galeria/archivos. */}
+          "capture" el sistema ofrece la galeria/archivos. Se comprime antes
+          de pasarla al padre: reduce el tiempo de subida y de lectura por
+          IA sin perder legibilidad (ver lib/image-compress.ts). */}
       <input
         id={`${idPrefix}-camera`}
         type="file"
         accept="image/*"
         capture="environment"
-        onChange={(e) => onChange(e.target.files?.[0] ?? null)}
+        onChange={async (e) => {
+          const picked = e.target.files?.[0] ?? null;
+          onChange(picked ? await compressImage(picked) : null);
+        }}
         className="hidden"
       />
       <input
         id={`${idPrefix}-gallery`}
         type="file"
         accept="image/*"
-        onChange={(e) => onChange(e.target.files?.[0] ?? null)}
+        onChange={async (e) => {
+          const picked = e.target.files?.[0] ?? null;
+          onChange(picked ? await compressImage(picked) : null);
+        }}
         className="hidden"
       />
       {file && <p className="text-xs text-muted-foreground">Foto seleccionada: {file.name}</p>}
