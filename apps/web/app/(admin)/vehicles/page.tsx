@@ -29,9 +29,11 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/admin/status-badge";
+import { RowActionsMenu, type RowAction } from "@/components/admin/row-actions-menu";
 import { apiClient, ApiError } from "@/lib/api-client";
 import { compressImage } from "@/lib/image-compress";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useIsMobile } from "@/hooks/use-media-query";
 import type {
   DeletedVehicle,
   Driver,
@@ -123,6 +125,7 @@ export default function VehiclesPage(): JSX.Element {
   const queryClient = useQueryClient();
   const { has } = usePermissions();
   const canSeeDeletedLog = has([PERMISSIONS.AUDIT_READ, PERMISSIONS.AUDIT_READ_GLOBAL]);
+  const isMobile = useIsMobile();
 
   // --- Registro automatico (solo fotos, sin campos manuales) ---
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -304,6 +307,39 @@ export default function VehiclesPage(): JSX.Element {
   const infoOtherDocs = infoDocs.filter((doc) => !["REGISTRATION_FRONT", "REGISTRATION_BACK", "VEHICLE_PHOTO"].includes(doc.kind));
   const infoDriver = infoVehicle?.assignments?.find((a) => a.active)?.driver;
 
+  // Mismas acciones para la tabla de escritorio y las tarjetas de
+  // celular/tablet — un solo boton "Acciones" con texto en vez de una fila
+  // de iconos sin explicacion.
+  function vehicleActions(vehicle: Vehicle): RowAction[] {
+    const currentAssignment = vehicle.assignments?.find((a) => a.active);
+    return [
+      { label: "Ver informacion", icon: <Info className="h-4 w-4" />, onClick: () => setInfoVehicle(vehicle) },
+      { label: "Asignar conductor", icon: <UserCog className="h-4 w-4" />, onClick: () => setAssignDialogVehicle(vehicle) },
+      {
+        label: "Quitar conductor asignado",
+        icon: <UserX className="h-4 w-4" />,
+        hidden: !currentAssignment,
+        disabled: unassignMutation.isPending,
+        onClick: () => currentAssignment && unassignMutation.mutate(currentAssignment.id),
+      },
+      {
+        label: vehicle.status === "ACTIVE" ? "Desactivar" : "Activar",
+        icon: vehicle.status === "ACTIVE" ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />,
+        onClick: () => statusMutation.mutate({ id: vehicle.id, status: vehicle.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" }),
+      },
+      {
+        label: "Eliminar",
+        icon: <Trash2 className="h-4 w-4" />,
+        destructive: true,
+        onClick: () => {
+          setDeleteTarget(vehicle);
+          setDeleteReason("");
+          setDeleteError(null);
+        },
+      },
+    ];
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -366,6 +402,30 @@ export default function VehiclesPage(): JSX.Element {
           <div className="p-6">
             <EmptyState icon={Truck} title="Sin vehiculos registrados" description="Registra el primer vehiculo de la flota." />
           </div>
+        ) : isMobile ? (
+          <div className="divide-y divide-border">
+            {vehicles.map((vehicle) => {
+              const currentDriver = vehicle.assignments?.find((a) => a.active)?.driver;
+              return (
+                <div key={vehicle.id} className="space-y-2 p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-lg font-bold">{vehicle.plate}</p>
+                    <StatusBadge status={vehicle.status} />
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {VEHICLE_TYPE_LABEL[vehicle.vehicleType]} · {[vehicle.brand, vehicle.model].filter(Boolean).join(" ") || "—"} (
+                    {vehicle.year})
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    Conductor: {currentDriver ? `${currentDriver.firstName} ${currentDriver.lastName}` : "Sin asignar"}
+                  </p>
+                  <div className="pt-1">
+                    <RowActionsMenu actions={vehicleActions(vehicle)} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         ) : (
           <Table>
             <TableHeader>
@@ -382,8 +442,7 @@ export default function VehiclesPage(): JSX.Element {
             </TableHeader>
             <TableBody>
               {vehicles.map((vehicle) => {
-                const currentAssignment = vehicle.assignments?.find((a) => a.active);
-                const currentDriver = currentAssignment?.driver;
+                const currentDriver = vehicle.assignments?.find((a) => a.active)?.driver;
                 return (
                   <TableRow key={vehicle.id}>
                     <TableCell className="font-medium">{vehicle.plate}</TableCell>
@@ -404,57 +463,7 @@ export default function VehiclesPage(): JSX.Element {
                       <StatusBadge status={vehicle.status} />
                     </TableCell>
                     <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label="Ver informacion"
-                          onClick={() => setInfoVehicle(vehicle)}
-                        >
-                          <Info className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label="Asignar conductor"
-                          onClick={() => setAssignDialogVehicle(vehicle)}
-                        >
-                          <UserCog className="h-4 w-4" />
-                        </Button>
-                        {currentAssignment && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            aria-label="Desasignar conductor"
-                            disabled={unassignMutation.isPending}
-                            onClick={() => unassignMutation.mutate(currentAssignment.id)}
-                          >
-                            <UserX className="h-4 w-4" />
-                          </Button>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label={vehicle.status === "ACTIVE" ? "Desactivar" : "Activar"}
-                          onClick={() =>
-                            statusMutation.mutate({ id: vehicle.id, status: vehicle.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" })
-                          }
-                        >
-                          {vehicle.status === "ACTIVE" ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label="Eliminar"
-                          onClick={() => {
-                            setDeleteTarget(vehicle);
-                            setDeleteReason("");
-                            setDeleteError(null);
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
+                      <RowActionsMenu actions={vehicleActions(vehicle)} />
                     </TableCell>
                   </TableRow>
                 );

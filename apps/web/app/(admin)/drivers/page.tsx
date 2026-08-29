@@ -29,8 +29,10 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/admin/status-badge";
+import { RowActionsMenu, type RowAction } from "@/components/admin/row-actions-menu";
 import { apiClient, ApiError } from "@/lib/api-client";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useIsMobile } from "@/hooks/use-media-query";
 import type {
   CedulaExtraction,
   CreatedDriver,
@@ -158,6 +160,7 @@ function earliestExpiration(categories: DriverLicenseCategoryEntry[]): string | 
 export default function DriversPage(): JSX.Element {
   const queryClient = useQueryClient();
   const { has } = usePermissions();
+  const isMobile = useIsMobile();
   const canSeeDeletedLog = has([PERMISSIONS.AUDIT_READ, PERMISSIONS.AUDIT_READ_GLOBAL]);
 
   // --- Registro automatico (solo fotos, sin campos manuales) ---
@@ -361,6 +364,40 @@ export default function DriversPage(): JSX.Element {
   const infoLicenseFront = infoDocs.find((doc) => doc.kind === "LICENSE_FRONT");
   const infoLicenseBack = infoDocs.find((doc) => doc.kind === "LICENSE_BACK");
 
+  // Mismas acciones para la tabla de escritorio y las tarjetas de
+  // celular/tablet — un solo boton "Acciones" con texto en vez de una fila
+  // de iconos sin explicacion.
+  function driverActions(driver: Driver): RowAction[] {
+    return [
+      { label: "Ver informacion", icon: <Info className="h-4 w-4" />, onClick: () => setInfoDriver(driver) },
+      {
+        label: "Ver PIN",
+        icon: <Eye className="h-4 w-4" />,
+        onClick: () => {
+          setViewPinDriver(driver);
+          setViewedPin(null);
+          setViewPinError(null);
+          viewPinMutation.mutate(driver.id);
+        },
+      },
+      {
+        label: driver.status === "ACTIVE" ? "Desactivar" : "Activar",
+        icon: driver.status === "ACTIVE" ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />,
+        onClick: () => statusMutation.mutate({ id: driver.id, status: driver.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" }),
+      },
+      {
+        label: "Eliminar",
+        icon: <Trash2 className="h-4 w-4" />,
+        destructive: true,
+        onClick: () => {
+          setDeleteTarget(driver);
+          setDeleteReason("");
+          setDeleteError(null);
+        },
+      },
+    ];
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -423,6 +460,28 @@ export default function DriversPage(): JSX.Element {
           <div className="p-6">
             <EmptyState icon={Users} title="Sin conductores" description="No hay conductores que coincidan con estos filtros." />
           </div>
+        ) : isMobile ? (
+          <div className="divide-y divide-border">
+            {drivers.map((driver) => {
+              const currentVehicle = driver.assignments?.find((a) => a.active)?.vehicle;
+              return (
+                <div key={driver.id} className="space-y-2 p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-lg font-bold">
+                      {driver.firstName} {driver.lastName}
+                    </p>
+                    <StatusBadge status={driver.status} />
+                  </div>
+                  <p className="text-sm text-muted-foreground">Documento: {driver.documentNumber}</p>
+                  <p className="text-sm text-muted-foreground">Categorias: {driver.licenseCategory || "—"}</p>
+                  <p className="text-sm text-muted-foreground">Vehiculo actual: {currentVehicle?.plate ?? "Sin asignar"}</p>
+                  <div className="pt-1">
+                    <RowActionsMenu actions={driverActions(driver)} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         ) : (
           <Table>
             <TableHeader>
@@ -450,46 +509,7 @@ export default function DriversPage(): JSX.Element {
                       <StatusBadge status={driver.status} />
                     </TableCell>
                     <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" aria-label="Ver informacion" onClick={() => setInfoDriver(driver)}>
-                          <Info className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label="Ver PIN"
-                          onClick={() => {
-                            setViewPinDriver(driver);
-                            setViewedPin(null);
-                            setViewPinError(null);
-                            viewPinMutation.mutate(driver.id);
-                          }}
-                        >
-                          <Eye className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label={driver.status === "ACTIVE" ? "Desactivar" : "Activar"}
-                          onClick={() =>
-                            statusMutation.mutate({ id: driver.id, status: driver.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" })
-                          }
-                        >
-                          {driver.status === "ACTIVE" ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label="Eliminar"
-                          onClick={() => {
-                            setDeleteTarget(driver);
-                            setDeleteReason("");
-                            setDeleteError(null);
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
+                      <RowActionsMenu actions={driverActions(driver)} />
                     </TableCell>
                   </TableRow>
                 );
