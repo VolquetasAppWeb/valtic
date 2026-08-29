@@ -18,6 +18,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { apiClient, ApiError } from "@/lib/api-client";
+import { useIsMobile } from "@/hooks/use-media-query";
 import type { Driver, OperationalSite, PaginatedResult, Project, Rate, Trip, Vehicle } from "@/lib/api-types";
 
 const TRIP_STATUS_LABEL: Record<string, string> = {
@@ -42,6 +43,7 @@ const TRIP_STATUS_LABEL: Record<string, string> = {
 
 export default function TripsPage(): JSX.Element {
   const queryClient = useQueryClient();
+  const isMobile = useIsMobile();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("");
@@ -273,6 +275,31 @@ export default function TripsPage(): JSX.Element {
         ) : trips.length === 0 ? (
           <div className="p-6">
             <EmptyState icon={Route} title="Sin viajes registrados" description="Crea el primer viaje asignando conductor y vehiculo." />
+          </div>
+        ) : isMobile ? (
+          <div className="divide-y divide-border">
+            {trips.map((trip) => (
+              <div key={trip.id} className="space-y-2 p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-lg font-bold">#{trip.sequentialNumber}</p>
+                  <StatusBadge status={trip.status} />
+                </div>
+                <p className="text-sm text-muted-foreground">{trip.project.name}</p>
+                <p className="text-sm text-muted-foreground">
+                  {trip.originSite.name} → {trip.destinationSite.name}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Conductor: {trip.driver.firstName} {trip.driver.lastName}
+                </p>
+                <p className="text-sm text-muted-foreground">Vehiculo: {trip.vehicle.plate}</p>
+                <Button variant="outline" className="w-full" asChild>
+                  <Link href={`/trips/${trip.id}`}>
+                    Ver detalle
+                    <ArrowRight className="h-4 w-4" />
+                  </Link>
+                </Button>
+              </div>
+            ))}
           </div>
         ) : (
           <Table>

@@ -14,6 +14,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { apiClient, ApiError } from "@/lib/api-client";
+import { useIsMobile } from "@/hooks/use-media-query";
 import type { Incident, PaginatedResult } from "@/lib/api-types";
 
 const TYPE_LABEL: Record<string, string> = {
@@ -45,6 +46,7 @@ const STATUS_LABEL: Record<string, string> = {
 
 export default function IncidentsPage(): JSX.Element {
   const queryClient = useQueryClient();
+  const isMobile = useIsMobile();
   const [statusFilter, setStatusFilter] = useState("");
   const [severityFilter, setSeverityFilter] = useState("");
   const [selected, setSelected] = useState<Incident | null>(null);
@@ -120,6 +122,38 @@ export default function IncidentsPage(): JSX.Element {
         ) : incidents.length === 0 ? (
           <div className="p-6">
             <EmptyState icon={AlertTriangle} title="Sin novedades" description="Las novedades reportadas apareceran aqui." />
+          </div>
+        ) : isMobile ? (
+          <div className="divide-y divide-border">
+            {incidents.map((incident) => (
+              <div key={incident.id} className="space-y-2 p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-lg font-bold">{TYPE_LABEL[incident.type]}</p>
+                  <Badge variant={SEVERITY_VARIANT[incident.severity]}>{incident.severity}</Badge>
+                </div>
+                <p className="text-sm text-muted-foreground">{new Date(incident.reportedAt).toLocaleString("es-CO")}</p>
+                <p className="text-sm text-muted-foreground">
+                  Conductor: {incident.driver.firstName} {incident.driver.lastName}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Viaje: {incident.trip ? `#${incident.trip.sequentialNumber}` : "—"}
+                </p>
+                <Badge variant={incident.status === "OPEN" ? "warning" : incident.status === "RESOLVED" ? "success" : "secondary"}>
+                  {STATUS_LABEL[incident.status]}
+                </Badge>
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    setSelected(incident);
+                    setResolutionNotes("");
+                    setActionError(null);
+                  }}
+                >
+                  Ver detalle
+                </Button>
+              </div>
+            ))}
           </div>
         ) : (
           <Table>

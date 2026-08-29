@@ -13,6 +13,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { apiClient } from "@/lib/api-client";
+import { useIsMobile } from "@/hooks/use-media-query";
 import type { LocationPoint, Trip } from "@/lib/api-types";
 
 const POLL_INTERVAL_MS = 15_000;
@@ -34,6 +35,7 @@ function relativeTime(dateIso: string): string {
 
 export default function MonitorPage(): JSX.Element {
   const [mapTrip, setMapTrip] = useState<Trip | null>(null);
+  const isMobile = useIsMobile();
 
   const { data: trips, isLoading, dataUpdatedAt, refetch, isFetching } = useQuery({
     queryKey: ["trips", "active"],
@@ -77,6 +79,34 @@ export default function MonitorPage(): JSX.Element {
         ) : !trips || trips.length === 0 ? (
           <div className="p-6">
             <EmptyState icon={Radar} title="Sin viajes activos" description="Los viajes en curso apareceran aqui automaticamente." />
+          </div>
+        ) : isMobile ? (
+          <div className="divide-y divide-border">
+            {trips.map((trip) => (
+              <div key={trip.id} className="space-y-2 p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-lg font-bold">#{trip.sequentialNumber}</p>
+                  <StatusBadge status={trip.status} />
+                </div>
+                <p className="text-sm text-muted-foreground">{trip.project.name}</p>
+                <p className="text-sm text-muted-foreground">
+                  Conductor: {trip.driver.firstName} {trip.driver.lastName}
+                </p>
+                <p className="text-sm text-muted-foreground">Vehiculo: {trip.vehicle.plate}</p>
+                <p className="text-sm text-muted-foreground">
+                  Ultima actualizacion: {trip.assignedAt ? relativeTime(trip.assignedAt) : "—"}
+                </p>
+                <div className="flex gap-2 pt-1">
+                  <Button variant="outline" className="flex-1" onClick={() => setMapTrip(trip)}>
+                    <MapIcon className="h-4 w-4" />
+                    Mapa
+                  </Button>
+                  <Button variant="outline" className="flex-1" asChild>
+                    <Link href={`/trips/${trip.id}`}>Ver detalle</Link>
+                  </Button>
+                </div>
+              </div>
+            ))}
           </div>
         ) : (
           <Table>
