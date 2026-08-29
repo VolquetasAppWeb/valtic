@@ -5,7 +5,9 @@ import { useDriverRuntimeStore } from "@/stores/driver-runtime-store";
 import { countPendingOutboxEvents } from "@/lib/driver/outbox";
 import { syncOutbox } from "@/lib/driver/sync-engine";
 
-const SYNC_INTERVAL_MS = 10_000;
+// Bajado de 10s a 4s para que la ubicacion del conductor le llegue al
+// despachador casi en tiempo real en "Monitor en vivo".
+const SYNC_INTERVAL_MS = 4_000;
 
 // Motor de sincronizacion del conductor: corre una sola vez por sesion
 // (montado en el layout de /driver), sin importar en que pantalla este.

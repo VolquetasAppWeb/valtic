@@ -1,5 +1,25 @@
 // Tipado minimo de lo que se usa de la API de Google Maps — evita depender
 // del paquete @types/google.maps solo para un puñado de llamadas.
+export interface GoogleDirectionsResult {
+  routes: unknown[];
+}
+
+export interface GoogleDirectionsService {
+  route: (
+    request: Record<string, unknown>,
+    callback: (result: GoogleDirectionsResult | null, status: string) => void,
+  ) => void;
+}
+
+export interface GoogleDirectionsRenderer {
+  setMap: (map: GoogleMap | null) => void;
+  setDirections: (result: GoogleDirectionsResult) => void;
+}
+
+export interface GoogleLatLngBounds {
+  extend: (pos: { lat: number; lng: number }) => void;
+}
+
 export interface GoogleMapsNamespace {
   maps: {
     Map: new (el: HTMLElement, opts: Record<string, unknown>) => GoogleMap;
@@ -7,6 +27,10 @@ export interface GoogleMapsNamespace {
     Circle: new (opts: Record<string, unknown>) => { setMap: (map: GoogleMap | null) => void; setRadius: (r: number) => void; setCenter: (pos: { lat: number; lng: number }) => void };
     InfoWindow: new (opts: Record<string, unknown>) => { open: (opts: Record<string, unknown>) => void; close: () => void; setContent: (html: string) => void };
     event: { addListener: (target: unknown, event: string, handler: (e: unknown) => void) => void };
+    DirectionsService: new () => GoogleDirectionsService;
+    DirectionsRenderer: new (opts?: Record<string, unknown>) => GoogleDirectionsRenderer;
+    LatLngBounds: new () => GoogleLatLngBounds;
+    TravelMode: { DRIVING: string };
   };
 }
 
@@ -14,6 +38,7 @@ export interface GoogleMap {
   setCenter: (pos: { lat: number; lng: number }) => void;
   setZoom: (zoom: number) => void;
   getZoom: () => number;
+  fitBounds: (bounds: GoogleLatLngBounds, padding?: number) => void;
 }
 
 export interface GoogleMarker {

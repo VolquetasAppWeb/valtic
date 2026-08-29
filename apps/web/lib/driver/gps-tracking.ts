@@ -26,9 +26,10 @@ const TRACKING_STATUSES: TripStatus[] = [
 ];
 
 // No enviamos cada posicion que entrega watchPosition (puede disparar muy
-// seguido con GPS de alta precision) — se agrupan con este intervalo minimo,
-// igual de frecuente que el simulador que reemplaza pero con datos reales.
-const MIN_SEND_INTERVAL_MS = 8_000;
+// seguido con GPS de alta precision) — se agrupan con este intervalo minimo.
+// Se bajo de 8s a 4s para que "Monitor en vivo" se sienta realmente en vivo
+// (el monitor ahora sondea cada 5s del lado del despachador).
+const MIN_SEND_INTERVAL_MS = 4_000;
 
 // Una posicion con accuracy de cientos/miles de metros (comun con
 // triangulacion por WiFi/red movil, sin señal GPS real) no sirve para

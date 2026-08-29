@@ -16,7 +16,12 @@ import { apiClient } from "@/lib/api-client";
 import { useIsMobile } from "@/hooks/use-media-query";
 import type { LocationPoint, Trip } from "@/lib/api-types";
 
-const POLL_INTERVAL_MS = 15_000;
+// "Monitor en vivo" debe sentirse vivo de verdad: se sondea rapido y no se
+// pausa aunque el despachador tenga la pestaña de fondo (refetchIntervalInBackground) —
+// a diferencia del resto de la app, aca la razon de ser de la pantalla es
+// justamente que se actualice sola sin que el usuario tenga que estar
+// mirandola fijo.
+const POLL_INTERVAL_MS = 5_000;
 
 const TripMap = dynamic(() => import("@/components/admin/trip-map"), {
   ssr: false,
@@ -41,6 +46,7 @@ export default function MonitorPage(): JSX.Element {
     queryKey: ["trips", "active"],
     queryFn: () => apiClient.get<Trip[]>("/trips/active"),
     refetchInterval: POLL_INTERVAL_MS,
+    refetchIntervalInBackground: true,
   });
 
   const { data: locations, isLoading: loadingLocations } = useQuery({
@@ -48,6 +54,7 @@ export default function MonitorPage(): JSX.Element {
     queryFn: () => apiClient.get<LocationPoint[]>(`/locations/trip/${mapTrip?.id}`),
     enabled: !!mapTrip,
     refetchInterval: mapTrip ? POLL_INTERVAL_MS : false,
+    refetchIntervalInBackground: true,
   });
 
   return (
