@@ -36,9 +36,9 @@ function OperationsContent(): JSX.Element {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 border-b border-border pb-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex gap-1 overflow-x-auto">
+    <div className="w-full min-w-0 space-y-6">
+      <div className="flex w-full min-w-0 flex-col gap-3 border-b border-border pb-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 gap-1 overflow-x-auto">
           {TABS.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.value;
@@ -47,19 +47,19 @@ function OperationsContent(): JSX.Element {
                 key={tab.value}
                 onClick={() => selectTab(tab.value)}
                 className={cn(
-                  "flex shrink-0 items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors",
+                  "flex shrink-0 items-center gap-2 border-b-2 px-4 py-3 text-base font-semibold transition-colors",
                   isActive
                     ? "border-primary text-foreground"
                     : "border-transparent text-muted-foreground hover:text-foreground",
                 )}
               >
-                <Icon className="h-4 w-4" />
+                <Icon className="h-5 w-5 shrink-0" />
                 {tab.label}
               </button>
             );
           })}
         </div>
-        <Button onClick={() => setWizardOpen(true)}>
+        <Button className="w-full sm:w-auto" onClick={() => setWizardOpen(true)}>
           <Sparkles className="h-4 w-4" />
           Añadir Obra
         </Button>

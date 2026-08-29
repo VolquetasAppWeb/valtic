@@ -132,6 +132,15 @@
     @apply border-border;
   }
 
+  html,
+  body {
+    /* Red de seguridad: si algun contenido interno (tabla, barra de
+       pestañas) se pasa del ancho de pantalla en movil, que se recorte en
+       vez de generar scroll horizontal de toda la pagina (que corta el
+       encabezado y los botones, como paso en la pestaña de Obras). */
+    overflow-x: hidden;
+  }
+
   body {
     @apply bg-background text-foreground antialiased;
     line-height: 1.6;

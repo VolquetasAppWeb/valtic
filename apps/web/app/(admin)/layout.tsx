@@ -7,9 +7,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     <AdminAuthGuard>
       <div className="flex min-h-screen">
         <Sidebar />
-        <div className="flex flex-1 flex-col">
+        <div className="flex min-w-0 flex-1 flex-col">
           <Header />
-          <main className="flex-1 overflow-x-hidden bg-background p-4 sm:p-6">{children}</main>
+          <main className="min-w-0 flex-1 overflow-x-hidden bg-background p-4 sm:p-6">{children}</main>
         </div>
       </div>
     </AdminAuthGuard>

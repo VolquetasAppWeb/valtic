@@ -367,7 +367,7 @@ export default function UsersPage(): JSX.Element {
             </div>
           ) : dispatcherStats ? (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="rounded-md border border-border bg-secondary/40 p-4">
                   <p className="text-sm text-muted-foreground">Viajes totales</p>
                   <p className="text-2xl font-bold">{dispatcherStats.tripsTotal}</p>
