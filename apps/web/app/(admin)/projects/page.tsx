@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -18,13 +18,17 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/admin/status-badge";
+import { RowActionsMenu, type RowAction } from "@/components/admin/row-actions-menu";
 import { apiClient, ApiError } from "@/lib/api-client";
+import { useIsMobile } from "@/hooks/use-media-query";
 import type { PaginatedResult, Project } from "@/lib/api-types";
 
 const STATUS_OPTIONS = ["PLANNED", "ACTIVE", "PAUSED", "CLOSED"] as const;
 
 export default function ProjectsPage(): JSX.Element {
   const queryClient = useQueryClient();
+  const router = useRouter();
+  const isMobile = useIsMobile();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Project | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -105,6 +109,27 @@ export default function ProjectsPage(): JSX.Element {
 
   const projects = data?.data ?? [];
 
+  function projectActions(project: Project): RowAction[] {
+    return [
+      {
+        label: "Puntos operativos",
+        icon: <MapPin className="h-4 w-4" />,
+        onClick: () => router.push(`/operations?tab=sitios&projectId=${project.id}`),
+      },
+      { label: "Editar", icon: <Pencil className="h-4 w-4" />, onClick: () => openEdit(project) },
+      {
+        label: "Eliminar",
+        icon: <Trash2 className="h-4 w-4" />,
+        destructive: true,
+        onClick: () => {
+          setDeleteTarget(project);
+          setDeleteReason("");
+          setDeleteError(null);
+        },
+      },
+    ];
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -155,6 +180,37 @@ export default function ProjectsPage(): JSX.Element {
           <div className="p-6">
             <EmptyState icon={HardHat} title="Sin obras registradas" description="Crea la primera obra para configurar sus puntos operativos." />
           </div>
+        ) : isMobile ? (
+          <div className="divide-y divide-border">
+            {projects.map((project) => (
+              <div key={project.id} className="space-y-2 p-4">
+                <p className="text-lg font-bold">{project.name}</p>
+                <p className="text-sm text-muted-foreground">Codigo: {project.code}</p>
+                <p className="text-sm text-muted-foreground">Cliente: {project.clientName || "—"}</p>
+                <p className="text-sm text-muted-foreground">Puntos operativos: {project._count?.operationalSites ?? 0}</p>
+                <Select
+                  value={project.status}
+                  onValueChange={(status) => statusMutation.mutate({ id: project.id, status: status as (typeof STATUS_OPTIONS)[number] })}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue>
+                      <StatusBadge status={project.status} />
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {STATUS_OPTIONS.map((status) => (
+                      <SelectItem key={status} value={status}>
+                        {status}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <div className="pt-1">
+                  <RowActionsMenu actions={projectActions(project)} />
+                </div>
+              </div>
+            ))}
+          </div>
         ) : (
           <Table>
             <TableHeader>
@@ -194,28 +250,7 @@ export default function ProjectsPage(): JSX.Element {
                     </Select>
                   </TableCell>
                   <TableCell className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="icon" asChild aria-label="Puntos operativos">
-                        <Link href={`/operations?tab=sitios&projectId=${project.id}`}>
-                          <MapPin className="h-4 w-4" />
-                        </Link>
-                      </Button>
-                      <Button variant="ghost" size="icon" onClick={() => openEdit(project)} aria-label="Editar">
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label="Eliminar"
-                        onClick={() => {
-                          setDeleteTarget(project);
-                          setDeleteReason("");
-                          setDeleteError(null);
-                        }}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
+                    <RowActionsMenu actions={projectActions(project)} />
                   </TableCell>
                 </TableRow>
               ))}

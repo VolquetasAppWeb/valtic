@@ -17,7 +17,9 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/admin/status-badge";
+import { RowActionsMenu, type RowAction } from "@/components/admin/row-actions-menu";
 import { apiClient, ApiError } from "@/lib/api-client";
+import { useIsMobile } from "@/hooks/use-media-query";
 import type { FleetOwner, Material, OperationalSite, PaginatedResult, Project, Rate } from "@/lib/api-types";
 
 const RATE_TYPE_LABEL: Record<string, string> = {
@@ -32,6 +34,7 @@ const currencyFormatter = new Intl.NumberFormat("es-CO", { style: "currency", cu
 
 export default function RatesPage(): JSX.Element {
   const queryClient = useQueryClient();
+  const isMobile = useIsMobile();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Rate | null>(null);
@@ -137,6 +140,26 @@ export default function RatesPage(): JSX.Element {
   const sitesForProject = sites.filter((site) => site.projectId === selectedProjectId);
   const visibleRates = (rates ?? []).filter((rate) => !statusFilter || rate.status === statusFilter);
 
+  function rateActions(rate: Rate): RowAction[] {
+    return [
+      {
+        label: rate.status === "ACTIVE" ? "Desactivar" : "Activar",
+        icon: rate.status === "ACTIVE" ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />,
+        onClick: () => statusMutation.mutate({ id: rate.id, status: rate.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" }),
+      },
+      {
+        label: "Eliminar",
+        icon: <Trash2 className="h-4 w-4" />,
+        destructive: true,
+        onClick: () => {
+          setDeleteTarget(rate);
+          setDeleteReason("");
+          setDeleteError(null);
+        },
+      },
+    ];
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -212,6 +235,33 @@ export default function RatesPage(): JSX.Element {
           <div className="p-6">
             <EmptyState icon={Receipt} title="Sin tarifas registradas" description="Crea la primera tarifa para una ruta." />
           </div>
+        ) : isMobile ? (
+          <div className="divide-y divide-border">
+            {visibleRates.map((rate) => (
+              <div key={rate.id} className="space-y-2 p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-lg font-bold">{currencyFormatter.format(Number(rate.value))}</p>
+                  <StatusBadge status={rate.status} />
+                </div>
+                <p className="text-sm text-muted-foreground">{rate.project?.name}</p>
+                <p className="text-sm text-muted-foreground">
+                  {rate.originSite?.name} → {rate.destinationSite?.name}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  {rate.material?.name} · {RATE_TYPE_LABEL[rate.rateType]}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Vigencia: {rate.validFrom.slice(0, 10)} {rate.validUntil ? `- ${rate.validUntil.slice(0, 10)}` : ""}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Dispatcher: {rate.dispatcher ? `${rate.dispatcher.firstName} ${rate.dispatcher.lastName}` : "Admin"}
+                </p>
+                <div className="pt-1">
+                  <RowActionsMenu actions={rateActions(rate)} />
+                </div>
+              </div>
+            ))}
+          </div>
         ) : (
           <Table>
             <TableHeader>
@@ -247,30 +297,7 @@ export default function RatesPage(): JSX.Element {
                     <StatusBadge status={rate.status} />
                   </TableCell>
                   <TableCell className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label={rate.status === "ACTIVE" ? "Desactivar" : "Activar"}
-                        onClick={() =>
-                          statusMutation.mutate({ id: rate.id, status: rate.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" })
-                        }
-                      >
-                        {rate.status === "ACTIVE" ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label="Eliminar"
-                        onClick={() => {
-                          setDeleteTarget(rate);
-                          setDeleteReason("");
-                          setDeleteError(null);
-                        }}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
+                    <RowActionsMenu actions={rateActions(rate)} />
                   </TableCell>
                 </TableRow>
               ))}

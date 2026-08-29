@@ -20,7 +20,9 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { AddressSearch } from "@/components/admin/address-search";
+import { RowActionsMenu, type RowAction } from "@/components/admin/row-actions-menu";
 import { apiClient, ApiError } from "@/lib/api-client";
+import { useIsMobile } from "@/hooks/use-media-query";
 import type { OperationalSite, PaginatedResult, Project } from "@/lib/api-types";
 
 const SiteMapPicker = dynamic(() => import("@/components/admin/site-map-picker"), {
@@ -35,6 +37,7 @@ function OperationalSitesContent(): JSX.Element {
   const router = useRouter();
   const searchParams = useSearchParams();
   const projectIdFilter = searchParams.get("projectId") ?? "";
+  const isMobile = useIsMobile();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<OperationalSite | null>(null);
@@ -169,6 +172,33 @@ function OperationalSitesContent(): JSX.Element {
   // encabezado de grupo, en vez de una lista plana dificil de escanear.
   const sitesList = sites ?? [];
 
+  function siteActions(site: OperationalSite): RowAction[] {
+    return [
+      {
+        label: "Generar QR de cierre",
+        icon: <QrCode className="h-4 w-4" />,
+        hidden: !(site.type === "UNLOAD" || site.type === "BOTH"),
+        onClick: () => openQrDialog(site),
+      },
+      { label: "Editar", icon: <Pencil className="h-4 w-4" />, onClick: () => openEdit(site) },
+      {
+        label: site.status === "ACTIVE" ? "Desactivar" : "Activar",
+        icon: site.status === "ACTIVE" ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />,
+        onClick: () => statusMutation.mutate({ id: site.id, status: site.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" }),
+      },
+      {
+        label: "Eliminar",
+        icon: <Trash2 className="h-4 w-4" />,
+        destructive: true,
+        onClick: () => {
+          setDeleteTarget(site);
+          setDeleteReason("");
+          setDeleteError(null);
+        },
+      },
+    ];
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -225,6 +255,34 @@ function OperationalSitesContent(): JSX.Element {
           <div className="p-6">
             <EmptyState icon={MapPin} title="Sin puntos operativos" description="Crea el primer punto de cargue o descargue." />
           </div>
+        ) : isMobile ? (
+          <div className="divide-y divide-border">
+            {sitesList.map((site, index) => {
+              const previousProjectId = sitesList[index - 1]?.project?.id;
+              const showGroupHeader = site.project?.id !== previousProjectId;
+              return (
+                <Fragment key={site.id}>
+                  {showGroupHeader && (
+                    <p className="bg-secondary/30 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      {site.project?.name ?? "Sin obra"}
+                    </p>
+                  )}
+                  <div className="space-y-2 p-4">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-lg font-bold">{site.name}</p>
+                      <StatusBadge status={site.status} />
+                    </div>
+                    <p className="text-sm text-muted-foreground">{SITE_TYPE_LABEL[site.type]}</p>
+                    <p className="text-sm text-muted-foreground">{site.address}</p>
+                    <p className="text-sm text-muted-foreground">Radio geocerca: {site.geofenceRadius} m</p>
+                    <div className="pt-1">
+                      <RowActionsMenu actions={siteActions(site)} />
+                    </div>
+                  </div>
+                </Fragment>
+              );
+            })}
+          </div>
         ) : (
           <Table>
             <TableHeader>
@@ -259,43 +317,7 @@ function OperationalSitesContent(): JSX.Element {
                         <StatusBadge status={site.status} />
                       </TableCell>
                       <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          {(site.type === "UNLOAD" || site.type === "BOTH") && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => openQrDialog(site)}
-                              aria-label="Generar QR de cierre"
-                            >
-                              <QrCode className="h-4 w-4" />
-                            </Button>
-                          )}
-                          <Button variant="ghost" size="icon" onClick={() => openEdit(site)} aria-label="Editar">
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            aria-label={site.status === "ACTIVE" ? "Desactivar" : "Activar"}
-                            onClick={() =>
-                              statusMutation.mutate({ id: site.id, status: site.status === "ACTIVE" ? "INACTIVE" : "ACTIVE" })
-                            }
-                          >
-                            {site.status === "ACTIVE" ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            aria-label="Eliminar"
-                            onClick={() => {
-                              setDeleteTarget(site);
-                              setDeleteReason("");
-                              setDeleteError(null);
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
+                        <RowActionsMenu actions={siteActions(site)} />
                       </TableCell>
                     </TableRow>
                   </Fragment>
