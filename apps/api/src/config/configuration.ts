@@ -73,7 +73,7 @@ export default (): AppConfig => ({
   redisUrl: process.env.REDIS_URL ?? "redis://localhost:6379",
   jwt: {
     accessSecret: process.env.JWT_ACCESS_SECRET ?? "dev_access_secret",
-    accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN ?? "15m",
+    accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN ?? "4h",
     refreshSecret: process.env.JWT_REFRESH_SECRET ?? "dev_refresh_secret",
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? "7d",
   },
