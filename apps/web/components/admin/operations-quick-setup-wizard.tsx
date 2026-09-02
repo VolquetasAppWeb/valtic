@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Loader2, MapPin, Plus, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { AlertTriangle, ArrowLeftRight, Loader2, MapPin, Plus, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -260,15 +260,33 @@ export function OperationsQuickSetupWizard({ open, onOpenChange, onCreated }: Pr
 
   const loadSites = useMemo(() => sites.filter((s) => s.type === "LOAD" || s.type === "BOTH"), [sites]);
   const unloadSites = useMemo(() => sites.filter((s) => s.type === "UNLOAD" || s.type === "BOTH"), [sites]);
-  const routeCount = useMemo(() => {
-    let count = 0;
+  // Cada ruta cargue->descargue se genera junto con su inversa
+  // descargue->cargue (el mismo camion suele necesitar tarifa para el
+  // regreso) — sin duplicar si ambos puntos ya son "cargue y descargue" y
+  // el propio cruce de listas ya habia generado ese sentido.
+  const routePairs = useMemo(() => {
+    const pairs: Array<{ originIndex: number; destinationIndex: number }> = [];
+    const seen = new Set<string>();
     for (const origin of loadSites) {
+      const originIndex = sites.indexOf(origin);
       for (const destination of unloadSites) {
-        if (origin !== destination) count += 1;
+        const destinationIndex = sites.indexOf(destination);
+        if (originIndex === destinationIndex) continue;
+        const key = `${originIndex}-${destinationIndex}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        pairs.push({ originIndex, destinationIndex });
       }
     }
-    return count;
-  }, [loadSites, unloadSites]);
+    for (const { originIndex, destinationIndex } of [...pairs]) {
+      const reverseKey = `${destinationIndex}-${originIndex}`;
+      if (seen.has(reverseKey)) continue;
+      seen.add(reverseKey);
+      pairs.push({ originIndex: destinationIndex, destinationIndex: originIndex });
+    }
+    return pairs;
+  }, [loadSites, unloadSites, sites]);
+  const routeCount = routePairs.length;
 
   const canSubmit =
     project.code.trim().length >= 1 &&
@@ -306,31 +324,50 @@ export function OperationsQuickSetupWizard({ open, onOpenChange, onCreated }: Pr
     setRates((prev) => prev.filter((_, i) => i !== index));
   }
 
+  // Duplica una tarifa ya llena (material, tipo, valor, vehiculo) con el
+  // origen y destino invertidos, para no tener que volver a escribirla a
+  // mano — el pedido puntual de "que la genere el sistema" para una
+  // tarifa agregada manualmente, no solo para el generador masivo.
+  function addReverseRate(index: number): void {
+    const rate = rates[index];
+    if (!rate) return;
+    setRates((prev) => [
+      ...prev,
+      {
+        ...rate,
+        originSiteIndex: rate.destinationSiteIndex,
+        destinationSiteIndex: rate.originSiteIndex,
+      },
+    ]);
+  }
+
+  function hasReverseRate(rate: RateDraft): boolean {
+    return rates.some(
+      (r) =>
+        r.originSiteIndex === rate.destinationSiteIndex &&
+        r.destinationSiteIndex === rate.originSiteIndex &&
+        r.materialName.trim().toLowerCase() === rate.materialName.trim().toLowerCase(),
+    );
+  }
+
   // El caso mas comun: una obra tiene N canteras y M botaderos, y todas las
   // combinaciones se cobran igual para un material. En vez de crear cada
   // ruta a mano, esto genera todas las combinaciones origen(cargue) x
-  // destino(descargue) de una vez con el mismo material/tipo/valor.
+  // destino(descargue) de una vez con el mismo material/tipo/valor —
+  // incluyendo automaticamente la ruta inversa de cada una (ver routePairs).
   function generateAllRoutes(): void {
     if (!bulkMaterial.trim() || !bulkValue) return;
     const value = Number(bulkValue);
     if (!Number.isFinite(value) || value <= 0) return;
 
-    const generated: RateDraft[] = [];
-    for (const origin of loadSites) {
-      const originIndex = sites.indexOf(origin);
-      for (const destination of unloadSites) {
-        const destinationIndex = sites.indexOf(destination);
-        if (originIndex === destinationIndex) continue;
-        generated.push({
-          originSiteIndex: originIndex,
-          destinationSiteIndex: destinationIndex,
-          materialName: bulkMaterial.trim(),
-          rateType: bulkRateType,
-          value,
-          vehicleType: bulkVehicleType || undefined,
-        });
-      }
-    }
+    const generated: RateDraft[] = routePairs.map(({ originIndex, destinationIndex }) => ({
+      originSiteIndex: originIndex,
+      destinationSiteIndex: destinationIndex,
+      materialName: bulkMaterial.trim(),
+      rateType: bulkRateType,
+      value,
+      vehicleType: bulkVehicleType || undefined,
+    }));
     setRates((prev) => [...prev, ...generated]);
     setBulkMaterial("");
     setBulkValue("");
@@ -528,53 +565,12 @@ export function OperationsQuickSetupWizard({ open, onOpenChange, onCreated }: Pr
                 </Button>
               </div>
 
-              {loadSites.length > 0 && unloadSites.length > 0 && (
-                <div className="flex flex-wrap items-end gap-2 rounded-md bg-secondary/40 p-2.5">
-                  <div className="space-y-1">
-                    <Label className="text-xs">Material</Label>
-                    <Input className="h-8 w-36" value={bulkMaterial} onChange={(e) => setBulkMaterial(e.target.value)} placeholder="Recebo comun" />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">Tipo</Label>
-                    <Select value={bulkRateType} onValueChange={(v) => setBulkRateType(v as RateDraft["rateType"])}>
-                      <SelectTrigger className="h-8 w-36">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {Object.entries(RATE_TYPE_LABEL).map(([value, label]) => (
-                          <SelectItem key={value} value={value}>
-                            {label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">Vehiculo (opcional)</Label>
-                    <Select value={bulkVehicleType || "ALL"} onValueChange={(v) => setBulkVehicleType(v === "ALL" ? "" : (v as VehicleType))}>
-                      <SelectTrigger className="h-8 w-36">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="ALL">Cualquiera</SelectItem>
-                        {Object.entries(VEHICLE_TYPE_LABEL).map(([value, label]) => (
-                          <SelectItem key={value} value={value}>
-                            {label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">Valor (COP)</Label>
-                    <Input className="h-8 w-28" type="number" value={bulkValue} onChange={(e) => setBulkValue(e.target.value)} placeholder="85000" />
-                  </div>
-                  <Button type="button" size="sm" onClick={generateAllRoutes} disabled={!bulkMaterial.trim() || !bulkValue || routeCount === 0}>
-                    <Wand2 className="h-3.5 w-3.5" />
-                    Generar {routeCount} {routeCount === 1 ? "ruta" : "rutas"}
-                  </Button>
-                </div>
-              )}
+              {/* Generador masivo de rutas (Material/Tipo/Vehiculo/Valor +
+                  "Generar N rutas") oculto a pedido: quedaba confuso tener
+                  dos formas de generar la ruta inversa (este formulario y
+                  el boton "Invertir ruta" de cada fila). La funcion
+                  generateAllRoutes/routePairs se deja intacta en el codigo
+                  por si se quiere reactivar mas adelante. */}
 
               {rates.length === 0 && <p className="text-xs text-muted-foreground">Sin tarifas todavia.</p>}
               <div className="space-y-2">
@@ -654,6 +650,21 @@ export function OperationsQuickSetupWizard({ open, onOpenChange, onCreated }: Pr
                         ))}
                       </SelectContent>
                     </Select>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="bg-info text-info-foreground hover:bg-info/90"
+                      onClick={() => addReverseRate(index)}
+                      disabled={
+                        rate.originSiteIndex === rate.destinationSiteIndex ||
+                        !rate.materialName.trim() ||
+                        hasReverseRate(rate)
+                      }
+                      title="Genera la misma tarifa en sentido contrario"
+                    >
+                      <ArrowLeftRight className="h-4 w-4" />
+                      Invertir ruta
+                    </Button>
                     <Button type="button" variant="ghost" size="icon" onClick={() => removeRate(index)} aria-label="Quitar">
                       <Trash2 className="h-4 w-4" />
                     </Button>

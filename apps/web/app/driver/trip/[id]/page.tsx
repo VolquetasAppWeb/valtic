@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, CheckCircle2, MapPin, MapPinOff, Satellite, WifiOff } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CheckCircle2, MapPin, MapPinOff, Satellite } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -12,7 +12,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { Incident, IncidentSeverity, IncidentType } from "@/lib/api-types";
 import { StatusBadge } from "@/components/admin/status-badge";
-import { useDriverRuntimeStore } from "@/stores/driver-runtime-store";
 import { useGpsTracking } from "@/lib/driver/gps-tracking";
 import { queueDriverAction, getOrCreateDeviceId } from "@/lib/driver/actions";
 import { getCurrentPosition } from "@/lib/driver/geolocation";
@@ -21,13 +20,41 @@ import type { DriverActionType } from "@/lib/driver/outbox";
 import type { Trip, TripStatus } from "@/lib/api-types";
 
 const MAIN_ACTION_BY_STATUS: Partial<Record<TripStatus, { label: string; action: DriverActionType }>> = {
-  ASSIGNED: { label: "Aceptar viaje", action: "ACCEPT" },
-  ACCEPTED: { label: "Iniciar viaje hacia cargue", action: "START_TO_LOAD" },
-  EN_ROUTE_TO_LOAD: { label: "Confirmar llegada al cargue", action: "ARRIVE_LOAD" },
   LOADING: { label: "Confirmar cargue completado", action: "CONFIRM_LOADED" },
   LOADED: { label: "Iniciar ruta a descargue", action: "START_TO_UNLOAD" },
   EN_ROUTE_TO_UNLOAD: { label: "Confirmar llegada al descargue", action: "ARRIVE_UNLOAD" },
 };
+
+// Mismo mapeo de estados que ya vive en el backend (ver trip-state-machine)
+// — se usa solo para actualizar la pantalla al instante apenas se toca el
+// boton, en vez de esperar al proximo sondeo de "trips/mine" (cada 5s). La
+// accion ya quedo guardada localmente (outbox) y sincronizandose; esto es
+// puramente que la UI no se sienta atrasada mientras tanto. El siguiente
+// sondeo corrige solo si algo no calzara con lo que el servidor confirme.
+const STATUS_AFTER_ACTION: Record<DriverActionType, TripStatus> = {
+  ACCEPT: "ACCEPTED",
+  START_TO_LOAD: "EN_ROUTE_TO_LOAD",
+  ARRIVE_LOAD: "LOADING",
+  CONFIRM_LOADED: "LOADED",
+  START_TO_UNLOAD: "EN_ROUTE_TO_UNLOAD",
+  ARRIVE_UNLOAD: "UNLOADING",
+};
+
+// El conductor ya no ve "Aceptado" ni "En ruta a cargue" como pasos
+// separados (pedido explicito: confundian mas de lo que ayudaban) — un
+// solo boton "Iniciar viaje" encadena las 3 acciones reales del backend
+// (ACCEPT, START_TO_LOAD, ARRIVE_LOAD) una tras otra. El estado interno del
+// viaje sigue pasando por esos 3 pasos igual que antes (auditoria, GPS,
+// reportes del despachador no cambian) — esto es solo una simplificacion
+// de la pantalla del conductor.
+const START_TRIP_STATUSES: TripStatus[] = ["ASSIGNED", "ACCEPTED", "EN_ROUTE_TO_LOAD"];
+
+function remainingStartActions(status: TripStatus): DriverActionType[] {
+  if (status === "ASSIGNED") return ["ACCEPT", "START_TO_LOAD", "ARRIVE_LOAD"];
+  if (status === "ACCEPTED") return ["START_TO_LOAD", "ARRIVE_LOAD"];
+  if (status === "EN_ROUTE_TO_LOAD") return ["ARRIVE_LOAD"];
+  return [];
+}
 
 interface QrValidateResponse {
   outcome: "COMPLETED" | "UNDER_REVIEW";
@@ -63,10 +90,6 @@ export default function DriverTripDetailPage(): JSX.Element {
     queryFn: () => apiClient.get<Trip>(`/trips/${params.id}`),
     refetchInterval: 5_000,
   });
-
-  const pendingCount = useDriverRuntimeStore((state) => state.pendingCount);
-  const forcedOffline = useDriverRuntimeStore((state) => state.forcedOffline);
-  const setForcedOffline = useDriverRuntimeStore((state) => state.setForcedOffline);
 
   const gps = useGpsTracking(trip?.id, trip?.status);
 
@@ -177,6 +200,7 @@ export default function DriverTripDetailPage(): JSX.Element {
   }
 
   const mainAction = MAIN_ACTION_BY_STATUS[trip.status];
+  const isStartTrip = START_TRIP_STATUSES.includes(trip.status);
   const isAtUnloading = trip.status === "UNLOADING";
 
   async function handleMainAction(): Promise<void> {
@@ -184,6 +208,31 @@ export default function DriverTripDetailPage(): JSX.Element {
     setIsSubmitting(true);
     try {
       await queueDriverAction(trip!.id, mainAction.action, gps.lastPosition);
+      // Actualiza la pantalla ya mismo con el estado que esta accion produce
+      // — no hace falta esperar el proximo sondeo para ver el boton
+      // siguiente, la accion ya quedo encolada (y sincronizandose).
+      const nextStatus = STATUS_AFTER_ACTION[mainAction.action];
+      queryClient.setQueryData<Trip>(["trips", "mine", params.id], (current) =>
+        current ? { ...current, status: nextStatus } : current,
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  // Un solo toque encadena ACCEPT -> START_TO_LOAD -> ARRIVE_LOAD (o los que
+  // falten, si la pantalla se recargo a medio camino) y salta directo a
+  // "Confirmar cargue completado", sin mostrar los estados intermedios.
+  async function handleStartTrip(): Promise<void> {
+    setIsSubmitting(true);
+    try {
+      const actions = remainingStartActions(trip!.status);
+      for (const action of actions) {
+        await queueDriverAction(trip!.id, action, gps.lastPosition);
+      }
+      queryClient.setQueryData<Trip>(["trips", "mine", params.id], (current) =>
+        current ? { ...current, status: "LOADING" } : current,
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -237,6 +286,12 @@ export default function DriverTripDetailPage(): JSX.Element {
         </CardContent>
       </Card>
 
+      {isStartTrip && (
+        <Button className="h-14 w-full text-base" disabled={isSubmitting} onClick={handleStartTrip}>
+          {isSubmitting ? "Registrando..." : "Iniciar viaje"}
+        </Button>
+      )}
+
       {mainAction && (
         <Button className="h-14 w-full text-base" disabled={isSubmitting} onClick={handleMainAction}>
           {isSubmitting ? "Registrando..." : mainAction.label}
@@ -250,7 +305,7 @@ export default function DriverTripDetailPage(): JSX.Element {
         </Button>
       )}
 
-      {!mainAction && !isAtUnloading && (
+      {!isStartTrip && !mainAction && !isAtUnloading && (
         <p className="text-center text-sm text-muted-foreground">
           Este viaje no tiene una accion pendiente para el conductor.
         </p>
@@ -261,58 +316,28 @@ export default function DriverTripDetailPage(): JSX.Element {
         Reportar novedad
       </Button>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-sm font-medium">
-            {gps.sharing ? (
-              <Satellite className="h-4 w-4 text-success" />
-            ) : (
-              <MapPinOff className="h-4 w-4 text-muted-foreground" />
-            )}
-            Ubicacion GPS
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {gps.sharing ? (
-            <div className="flex items-center gap-2 text-xs text-success">
-              <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-success" />
-              </span>
-              Compartiendo tu ubicacion en tiempo real con el despachador
-              {gps.lastPosition && ` · precision ${Math.round(gps.lastPosition.accuracy)}m`}
-            </div>
-          ) : gps.waitingForAccuracy ? (
-            <div className="flex items-center gap-2 text-xs text-warning">
-              <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-warning opacity-75" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-warning" />
-              </span>
-              Buscando señal GPS precisa
-              {gps.lastPosition && ` (actual ~${Math.round(gps.lastPosition.accuracy)}m, se necesita 10m o menos)`}
-            </div>
-          ) : gps.error ? (
-            <p className="text-xs text-destructive">{gps.error}</p>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              La ubicacion se comparte automaticamente mientras el viaje esta en curso (desde que lo aceptas hasta
-              que llegas al punto de descargue), y se detiene apenas termina.
-            </p>
-          )}
-          {pendingCount > 0 && (
-            <p className="text-xs text-muted-foreground">{pendingCount} punto(s) pendientes de sincronizar.</p>
-          )}
-          <Button
-            variant={forcedOffline ? "destructive" : "outline"}
-            size="sm"
-            className="w-full"
-            onClick={() => setForcedOffline(!forcedOffline)}
-          >
-            <WifiOff className="h-4 w-4" />
-            {forcedOffline ? "Reconectar" : "Simular sin conexion"}
-          </Button>
-        </CardContent>
-      </Card>
+      {/* Aviso minimo de ubicacion — el rastreo real (useGpsTracking, envio
+          de puntos, sincronizacion) sigue funcionando exactamente igual,
+          solo se simplifico lo que el conductor ve: antes era una tarjeta
+          completa con precision en metros, contador de pendientes y un
+          boton para simular estar sin conexion, que mas confundia que
+          ayudaba. */}
+      {gps.sharing ? (
+        <p className="flex items-center gap-2 text-xs text-success">
+          <Satellite className="h-4 w-4" />
+          Compartiendo ubicacion
+        </p>
+      ) : gps.error ? (
+        <p className="flex items-center gap-2 text-xs text-destructive">
+          <MapPinOff className="h-4 w-4" />
+          {gps.error}
+        </p>
+      ) : (
+        <p className="flex items-center gap-2 text-xs text-muted-foreground">
+          <MapPinOff className="h-4 w-4" />
+          Buscando señal GPS...
+        </p>
+      )}
 
       <Dialog open={qrDialogOpen} onOpenChange={setQrDialogOpen}>
         <DialogContent>
@@ -332,12 +357,15 @@ export default function DriverTripDetailPage(): JSX.Element {
                     </Button>
                   </div>
                 ) : (
+                  // El codigo en si (confirmationCode) sigue viajando en la
+                  // peticion de cierre — solo se dejo de mostrar en pantalla
+                  // porque confundia a los conductores (parecia que habia
+                  // que escribirlo en algun lado).
                   <div className="rounded-md border border-border bg-secondary/40 p-3 text-center">
-                    <p className="text-xs text-muted-foreground">Tu codigo de confirmacion</p>
-                    <p className="font-mono text-sm font-semibold break-all">{confirmationCode}</p>
+                    <CheckCircle2 className="mx-auto h-6 w-6 text-success" />
+                    <p className="mt-1 text-sm font-medium">Todo listo para cerrar el viaje</p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Ya quedo listo, no necesitas escribir nada. Solo confirma abajo estando en el punto de
-                      descargue.
+                      No necesitas escribir nada. Solo confirma abajo estando en el punto de descargue.
                     </p>
                   </div>
                 )}

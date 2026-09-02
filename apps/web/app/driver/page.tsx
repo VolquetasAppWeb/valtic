@@ -10,7 +10,16 @@ import { useAuthStore } from "@/stores/auth-store";
 import { apiClient } from "@/lib/api-client";
 import type { Trip } from "@/lib/api-types";
 
-const TERMINAL_STATUSES = new Set(["SETTLED", "CANCELLED", "MANUALLY_CLOSED", "REJECTED", "INCLUDED_IN_SETTLEMENT"]);
+// "COMPLETED" faltaba aca — sin el, un viaje ya completado seguia
+// contando como "viaje activo" y mostraba el boton "Ver viaje activo".
+const TERMINAL_STATUSES = new Set([
+  "COMPLETED",
+  "SETTLED",
+  "CANCELLED",
+  "MANUALLY_CLOSED",
+  "REJECTED",
+  "INCLUDED_IN_SETTLEMENT",
+]);
 
 export default function DriverHomePage(): JSX.Element {
   const router = useRouter();
@@ -96,17 +105,19 @@ export default function DriverHomePage(): JSX.Element {
             <CardTitle className="text-sm font-medium text-foreground">Viajes recientes</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
+            {/* Historial de solo lectura — un viaje ya terminado no se
+                vuelve a abrir, para no confundir al conductor haciendole
+                pensar que todavia tiene algo pendiente ahi. */}
             {recentTrips.map((trip) => (
-              <button
+              <div
                 key={trip.id}
-                onClick={() => router.push(`/driver/trip/${trip.id}`)}
-                className="flex w-full items-center justify-between rounded-md border border-border px-3 py-2 text-left text-xs hover:bg-secondary/50"
+                className="flex w-full items-center justify-between rounded-md border border-border px-3 py-2 text-xs"
               >
                 <span>
                   #{trip.sequentialNumber} · {trip.originSite.name} → {trip.destinationSite.name}
                 </span>
                 <StatusBadge status={trip.status} />
-              </button>
+              </div>
             ))}
           </CardContent>
         </Card>
