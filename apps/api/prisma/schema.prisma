@@ -305,7 +305,12 @@ model User {
   deletedMaterials    Material[]      @relation("MaterialDeletedBy")
   deletedFleetOwners  FleetOwner[]    @relation("FleetOwnerDeletedBy")
 
-  @@unique([tenantId, email])
+  // Ya no es @@unique: un usuario eliminado (soft-delete) debe poder
+  // liberar su correo para que se pueda volver a usar en una cuenta nueva.
+  // La unicidad real se aplica solo entre usuarios activos via un indice
+  // unico parcial (WHERE "deletedAt" IS NULL) creado a mano en la
+  // migracion — ver 20260901120000_user_email_unique_only_active.
+  @@index([tenantId, email])
   @@index([tenantId])
   @@index([tenantId, deletedAt])
   @@index([passwordResetTokenHash])

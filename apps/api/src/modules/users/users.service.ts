@@ -22,7 +22,7 @@ export class UsersService {
   async create(dto: CreateUserDto, actor: AuthenticatedUser) {
     const tenantId = this.requireTenantId(actor);
 
-    const existing = await this.prisma.user.findFirst({ where: { tenantId, email: dto.email } });
+    const existing = await this.prisma.user.findFirst({ where: { tenantId, email: dto.email, deletedAt: null } });
     if (existing) {
       throw new ConflictException({ code: "USER_EMAIL_TAKEN", message: "Ya existe un usuario con ese correo en la empresa." });
     }

@@ -70,7 +70,7 @@ export default function FleetOwnersPage(): JSX.Element {
     setEditing(null);
     setFormError(null);
     setDispatcherId("");
-    reset({ type: "NATURAL_PERSON", documentNumber: "", name: "", phone: "", email: "", bankName: "", bankAccountType: "", bankAccountLastFour: "" });
+    reset({ type: "NATURAL_PERSON", documentNumber: "", name: "", phone: "", email: "" });
     setDialogOpen(true);
   }
 
@@ -84,9 +84,6 @@ export default function FleetOwnersPage(): JSX.Element {
       name: owner.name,
       phone: owner.phone,
       email: owner.email ?? "",
-      bankName: owner.bankName ?? "",
-      bankAccountType: owner.bankAccountType ?? "",
-      bankAccountLastFour: owner.bankAccountLastFour ?? "",
     });
     setDialogOpen(true);
   }
@@ -96,9 +93,6 @@ export default function FleetOwnersPage(): JSX.Element {
       const payload = {
         ...values,
         email: values.email || undefined,
-        bankName: values.bankName || undefined,
-        bankAccountType: values.bankAccountType || undefined,
-        bankAccountLastFour: values.bankAccountLastFour || undefined,
         dispatcherId: editing ? dispatcherId || null : dispatcherId || undefined,
       };
       return editing
@@ -329,20 +323,6 @@ export default function FleetOwnersPage(): JSX.Element {
               <p className="text-xs text-muted-foreground">
                 Solo el despachador asignado (y el administrador) podra ver y usar este propietario al crear vehiculos.
               </p>
-            </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="bankName">Banco</Label>
-                <Input id="bankName" {...register("bankName")} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="bankAccountType">Tipo cuenta</Label>
-                <Input id="bankAccountType" placeholder="SAVINGS" {...register("bankAccountType")} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="bankAccountLastFour">Ultimos 4 digitos</Label>
-                <Input id="bankAccountLastFour" maxLength={4} {...register("bankAccountLastFour")} />
-              </div>
             </div>
             {formError && <p className="text-sm text-destructive">{formError}</p>}
             <DialogFooter>
